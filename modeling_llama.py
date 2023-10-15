@@ -850,8 +850,10 @@ class LlamaModel(LlamaPreTrainedModel):
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
+            print("inference by input ids")
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
+            print("inference by input embedding")
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
@@ -872,6 +874,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+            print("input embeds", inputs_embeds)
         # embed positions
         if attention_mask is None:
             attention_mask = torch.ones(
@@ -910,8 +913,14 @@ class LlamaModel(LlamaPreTrainedModel):
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
             # if self.gradient_checkpointing and self.training:    # modified!
+            # or to modifiy this, if idx > some certain number, cut the forward process?
+            # cut to 8 layers
+            if idx >= 8:
+                continue
+            # print("forward pass layer", idx)
+            # print(decoder_layer)
             if self.gradient_checkpointing:
-                print("WARNING: using gradient checkpointing")
+                # print("WARNING: using gradient checkpointing")
                 def create_custom_forward(module):
                     def custom_forward(*inputs):
                         # None for past_key_value
