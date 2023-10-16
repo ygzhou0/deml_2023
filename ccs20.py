@@ -31,16 +31,7 @@ embed_layer = model.model.get_input_embeddings()
 
 
 '''the original prompt we try to infer'''
-prompt = """We have long been expecting you,” said Stepan Arkadyevitch, going into 
-his room and letting Levin’s hand go as though to show that here all 
-danger was over. “I am very, very glad to see you,” he went on. “Well, 
-how are you? Eh? When did you come?” Levin was silent, looking at the unknown faces of Oblonsky’s two 
-companions, and especially at the hand of the elegant Grinevitch, which 
-had such long white fingers, such long yellow filbert-shaped nails, and 
-such huge shining studs on the shirt-cuff, that apparently they 
-absorbed all his attention, and allowed him no freedom of thought. 
-Oblonsky noticed this at once, and smiled. “I have the honor of knowing your brother, Sergey Ivanovitch,” said 
-Grinevitch, holding out his slender hand with its long nails. """
+prompt = "yes sir"
 
 
 '''get answer's hidden state'''
@@ -57,13 +48,15 @@ with torch.no_grad():
 means = torch.zeros(tokenizer.vocab_size, len(target_input_ids[0]) - 1)
 # initialize z with gaussian distribution
 z = torch.normal(mean=means, std=0.1)
-start_embed = torch.zeros(tokenizer.vocab_size, 1)
-z = torch.cat((start_embed, z), dim=1)
-z[1][0] = 10    # fix the first token as <start>
 z = z.type(torch.float16).to(devices[0])
 z.requires_grad_(True)
 # temperature=0.05   # change hyperparameters
 temperature = 1
+
+# set fixed <start> token
+START_EMBED = torch.zeros(tokenizer.vocab_size, 1).type(torch.float16)
+START_EMBED[1][0] = 1    # fix the first token as <start>
+# z = torch.cat((start_embed, z), dim=1)
 
 
 '''cutting layers'''
@@ -81,11 +74,12 @@ epochs = []
 loss_lst = []
 cos_sim_lst = []
 
-total_epoch = 1000
+total_epoch = 100
 
 for i in range(total_epoch):
     '''forward pass'''
     sftz = F.softmax(z / temperature, dim=1)
+    sftz = torch.cat((START_EMBED.to(sftz.device), sftz), dim=1)    # add a fixed <start> token
     new_input_embed = torch.mm(sftz.T, embed_layer.weight)
 
 
@@ -116,18 +110,21 @@ for i in range(total_epoch):
     epochs.append(i)
     loss_lst.append(loss.cpu().detach())
     if i % 20 == 0:
-        print("recovered text:{}".format(tokenizer.decode(list(torch.argmax(z, dim=0)))))
-        print("acc:{}".format(sum((target_input_ids==torch.argmax(z, dim=0))[0]) / len(target_input_ids[0])) )
+        tmp_input_ids = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0)  # add <start> token
+        print("recovered text:{}".format(tokenizer.decode(list(tmp_input_ids))))
+        print("acc:{}".format(sum((target_input_ids==tmp_input_ids)[0]) / len(target_input_ids[0])) )
         print("cosine sim:{}".format(torch.mean(cos_sim)))
 '''show result'''
-print("final\nrecovered text:{}".format(tokenizer.decode(list(torch.argmax(z, dim=0)))))
-print("acc:{}".format(sum((target_input_ids==torch.argmax(z, dim=0))[0]) / len(target_input_ids[0])) )
+tmp_input_ids = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0)
+print("final\nrecovered text:{}".format(tokenizer.decode(list(tmp_input_ids))))
+print("acc:{}".format(sum((target_input_ids==tmp_input_ids)[0]) / len(target_input_ids[0])) )
 
 
 '''calculate discrete loss'''
 with torch.no_grad():
     # print("original input ids", recover_token['input_ids'])
-    recover_input_ids = torch.argmax(z, dim=0).unsqueeze(dim=0).to(model.device)
+    recover_input = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0) # add <start> token
+    recover_input_ids = recover_input.unsqueeze(dim=0).to(model.device)
     recover_attention_mask = target_token['attention_mask'].to(model.device)
     recovered_inputs = {'input_ids': recover_input_ids, 'attention_mask': recover_attention_mask}
     recovered_state = model(**recovered_inputs)
@@ -136,8 +133,10 @@ with torch.no_grad():
 
 
 '''show low confidence word'''
-print(torch.max(F.softmax(z, dim=1), dim=0))
-non_confid_ids = (torch.max(F.softmax(z, dim=1), dim=0).values <= 0.98)
+sftz_conf = F.softmax(z, dim=1)
+sftz_conf = torch.cat((START_EMBED.to(sftz_conf.device), sftz_conf), dim=1)    # add a fixed <start> token
+print("low confidence:\n",torch.max(sftz_conf, dim=0))
+non_confid_ids = (torch.max(sftz_conf, dim=0).values <= 0.98)
 print(non_confid_ids)
 print(tokenizer.decode(target_input_ids[0][non_confid_ids]))
 
