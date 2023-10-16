@@ -850,10 +850,10 @@ class LlamaModel(LlamaPreTrainedModel):
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
-            print("inference by input ids")
+            # print("inference by input ids")
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
-            print("inference by input embedding")
+            # print("inference by input embedding")
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
