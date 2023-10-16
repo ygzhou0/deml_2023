@@ -19,7 +19,7 @@ tokenizer.padding_side = 'left'
 
 
 devices = ['cuda:0']
-model_kwargs = {"low_cpu_mem_usage": True, "use_cache": True}
+model_kwargs = {"low_cpu_mem_usage": True, "use_cache": False}
 model = AutoModelForCausalLM.from_pretrained(
     "./vicuna-7b-v1.5",
     torch_dtype=torch.float16,
@@ -31,20 +31,26 @@ embed_layer = model.model.get_input_embeddings()
 
 
 '''the original prompt we try to infer'''
-# prompt = "I fly at least once a month ZRH-LJU-ZRH. My experience is that the staff on the ground need a better education regarding how to care of passengers. If it comes to a delay and pax have to go to the info desk to change tickets and so on then you really see of how unfriendly and unprepared staff are. The airplanes could be cleaned better and I do also see some room for improvement for the flight staff."
-prompt = "On my Ljubljana - Munich flight in business class Adria used the CRJ-900 Next Generation which is a great plane. I love the very large windows which are at a proper height so that you don't have to bend your neck down in order to look out the window like on the older versions of this Bombardier equipment. Moreover the aircraft is very quiet. It's a short flight but in business class you got a good meal and a comfy seat."
-# 0.5283 precision!
+prompt = """We have long been expecting you,” said Stepan Arkadyevitch, going into 
+his room and letting Levin’s hand go as though to show that here all 
+danger was over. “I am very, very glad to see you,” he went on. “Well, 
+how are you? Eh? When did you come?” Levin was silent, looking at the unknown faces of Oblonsky’s two 
+companions, and especially at the hand of the elegant Grinevitch, which 
+had such long white fingers, such long yellow filbert-shaped nails, and 
+such huge shining studs on the shirt-cuff, that apparently they 
+absorbed all his attention, and allowed him no freedom of thought. 
+Oblonsky noticed this at once, and smiled. “I have the honor of knowing your brother, Sergey Ivanovitch,” said 
+Grinevitch, holding out his slender hand with its long nails. """
 
 
 '''get answer's hidden state'''
 with torch.no_grad():
     target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
-    print("original input ids", target_token['input_ids'])
     target_input_ids = target_token['input_ids'].to(model.device)
     target_attention_mask = target_token['attention_mask'].to(model.device)
     inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
     next_ = model(**inputs)
-    print("phi(x*)", next_.hidden_states)
+    print("phi(x*)", next_.hidden_states, next_.hidden_states.shape)
 
 
 '''relax word vectors'''
@@ -56,7 +62,6 @@ z = torch.cat((start_embed, z), dim=1)
 z[1][0] = 10    # fix the first token as <start>
 z = z.type(torch.float16).to(devices[0])
 z.requires_grad_(True)
-# print("z", z, z.shape)
 # temperature=0.05   # change hyperparameters
 temperature = 1
 
@@ -76,7 +81,9 @@ epochs = []
 loss_lst = []
 cos_sim_lst = []
 
-for i in range(1000):
+total_epoch = 1000
+
+for i in range(total_epoch):
     '''forward pass'''
     sftz = F.softmax(z / temperature, dim=1)
     new_input_embed = torch.mm(sftz.T, embed_layer.weight)
@@ -108,33 +115,55 @@ for i in range(1000):
     # print("now tokens", torch.argmax(z, dim=0))
     epochs.append(i)
     loss_lst.append(loss.cpu().detach())
-
+    if i % 20 == 0:
+        print("recovered text:{}".format(tokenizer.decode(list(torch.argmax(z, dim=0)))))
+        print("acc:{}".format(sum((target_input_ids==torch.argmax(z, dim=0))[0]) / len(target_input_ids[0])) )
+        print("cosine sim:{}".format(torch.mean(cos_sim)))
 '''show result'''
-print("recovered text:{}".format(tokenizer.decode(list(torch.argmax(z, dim=0)))))
+print("final\nrecovered text:{}".format(tokenizer.decode(list(torch.argmax(z, dim=0)))))
 print("acc:{}".format(sum((target_input_ids==torch.argmax(z, dim=0))[0]) / len(target_input_ids[0])) )
 
-'''show loss curve'''
-plt.figure()
-ax = plt.axes()
-ax.spines['top'].set_visible(False)
-ax.spines['right'].set_visible(False)
 
-plt.xlabel('epoch')
-plt.ylabel('loss')
-plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='L2 loss')
-plt.legend()
-plt.title('L2 Loss Curve')
-plt.savefig("loss-{}-{}-{}-{}-{}-{}.png".format(*time.localtime()))
+'''calculate discrete loss'''
+with torch.no_grad():
+    # print("original input ids", recover_token['input_ids'])
+    recover_input_ids = torch.argmax(z, dim=0).unsqueeze(dim=0).to(model.device)
+    recover_attention_mask = target_token['attention_mask'].to(model.device)
+    recovered_inputs = {'input_ids': recover_input_ids, 'attention_mask': recover_attention_mask}
+    recovered_state = model(**recovered_inputs)
+    recovered_loss = loss_func(recovered_state.hidden_states, next_.hidden_states)
+    print("true recover loss", recovered_loss)
 
 
-plt.figure()
-ax = plt.axes()
-ax.spines['top'].set_visible(False)
-ax.spines['right'].set_visible(False)
+'''show low confidence word'''
+print(torch.max(F.softmax(z, dim=1), dim=0))
+non_confid_ids = (torch.max(F.softmax(z, dim=1), dim=0).values <= 0.98)
+print(non_confid_ids)
+print(tokenizer.decode(target_input_ids[0][non_confid_ids]))
 
-plt.xlabel('epoch')
-plt.ylabel('cosine sim')
-plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
-plt.legend()
-plt.title('cosine similarity Curve')
-plt.savefig("cos-sim-{}-{}-{}-{}-{}-{}.png".format(*time.localtime()))
+
+# '''show loss curve'''
+# plt.figure()
+# ax = plt.axes()
+# ax.spines['top'].set_visible(False)
+# ax.spines['right'].set_visible(False)
+
+# plt.xlabel('epoch')
+# plt.ylabel('loss')
+# plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='L2 loss')
+# plt.legend()
+# plt.title('L2 Loss Curve')
+# plt.savefig("loss-{}-{}-{}-{}-{}-{}.png".format(*time.localtime()))
+
+
+# plt.figure()
+# ax = plt.axes()
+# ax.spines['top'].set_visible(False)
+# ax.spines['right'].set_visible(False)
+
+# plt.xlabel('epoch')
+# plt.ylabel('cosine sim')
+# plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
+# plt.legend()
+# plt.title('cosine similarity Curve')
+# plt.savefig("cos-sim-{}-{}-{}-{}-{}-{}.png".format(*time.localtime()))
