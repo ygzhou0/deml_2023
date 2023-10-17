@@ -854,6 +854,8 @@ class LlamaModel(LlamaPreTrainedModel):
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             # print("inference by input embedding")
+            # print("handmade embedding:", inputs_embeds)
+            # NOTE: start embedding already set correct
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
@@ -874,7 +876,8 @@ class LlamaModel(LlamaPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-            print("input embeds", inputs_embeds)
+            # print("input embeds (for first start token)", inputs_embeds)
+            # NOTE: start embedding already right
         # embed positions
         if attention_mask is None:
             attention_mask = torch.ones(
@@ -907,18 +910,20 @@ class LlamaModel(LlamaPreTrainedModel):
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.layers):
+            # or to modifiy this, if idx > some certain number, cut the forward process?
+            # cut to 8 layers
+            if idx >= 8:
+                continue
+
+            print(idx, hidden_states)
+
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
+                
             # if self.gradient_checkpointing and self.training:    # modified!
-            # or to modifiy this, if idx > some certain number, cut the forward process?
-            # cut to 8 layers
-            if idx >= 8:
-                continue
-            # print("forward pass layer", idx)
-            # print(decoder_layer)
             if self.gradient_checkpointing:
                 # print("WARNING: using gradient checkpointing")
                 def create_custom_forward(module):
