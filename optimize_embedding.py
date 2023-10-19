@@ -73,7 +73,18 @@ def main():
     embed_layer = model.model.get_input_embeddings()
 
     '''the original prompt we try to infer'''
-    prompt = "yes sir"
+    # prompt = "yes sir"
+    prompt = """We have long been expecting you, said Stepan, going into"""
+
+    # his room and letting Levin’s hand go as though to show that here all 
+    # danger was over. “I am very, very glad to see you,” he went on. “Well, 
+    # how are you? Eh? When did you come?” Levin was silent, looking at the unknown faces of Oblonsky’s two 
+    # companions, and especially at the hand of the elegant Grinevitch, which 
+    # had such long white fingers, such long yellow filbert-shaped nails, and 
+    # such huge shining studs on the shirt-cuff, that apparently they 
+    # absorbed all his attention, and allowed him no freedom of thought. 
+    # Oblonsky noticed this at once, and smiled. “I have the honor of knowing your brother, Sergey Ivanovitch,” said 
+    # Grinevitch, holding out his slender hand with its long nails. """
 
     '''get answer's hidden state'''
     target_input_ids, target_attention_mask, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
@@ -87,6 +98,7 @@ def main():
     new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
     new_input_embed = torch.FloatTensor(new_input_embed_np)
     new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float16).to(devices[0])
+    new_input_embed[0][0] = embed_layer.weight[1].data
     new_input_embed.requires_grad_(True)
 
     '''cutting layers'''
@@ -103,7 +115,7 @@ def main():
     loss_lst = []
     cos_sim_lst = []
 
-    total_epoch = 100
+    total_epoch = 1000
 
     for i in range(total_epoch):
         '''forward pass'''
@@ -111,7 +123,7 @@ def main():
         # sftz = torch.cat((START_EMBED.to(sftz.device), sftz), dim=1)    # add a fixed <start> token
         # new_input_embed = torch.mm(sftz.T, embed_layer.weight)
         # print('sftz:', sftz)
-        print("new input embed", new_input_embed, new_input_embed.shape, new_input_embed.requires_grad)
+        # print("new input embed", new_input_embed, new_input_embed.shape, new_input_embed.requires_grad)
         # print("input embed loss", loss_func(new_input_embed, ori_input_embed))
 
         '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
@@ -152,22 +164,31 @@ def main():
     print("shapes", embed_layer.weight.shape, new_input_embed.shape)
     print("detect nan", torch.any(torch.isnan(new_input_embed)))
     print("detect nan", torch.any(torch.isnan(embed_layer.weight)))
-    print("final cosine sim,", F.cosine_similarity(new_input_embed[0], embed_layer.weight))
-    print("detect nan,", torch.any(torch.isnan(F.cosine_similarity(new_input_embed[0], embed_layer.weight))))
-    first_word_cossim = F.cosine_similarity(new_input_embed[0], embed_layer.weight)
-    first_word_cossim[torch.isnan(first_word_cossim)] = -1
-    print(len(first_word_cossim))
-    print(torch.max(first_word_cossim))
-    print(torch.argmax(first_word_cossim))
-    second_word_cossim = F.cosine_similarity(new_input_embed[1], embed_layer.weight)
-    second_word_cossim[torch.isnan(second_word_cossim)] = -1 
-    print(torch.max(second_word_cossim))
-    print(torch.argmax(second_word_cossim))
-    third_word_cossim = F.cosine_similarity(new_input_embed[2], embed_layer.weight)
-    third_word_cossim[torch.isnan(third_word_cossim)] = -1 
-    print(torch.max(third_word_cossim))
-    print(torch.argmax(third_word_cossim))
-    
+    # print("final cosine sim,", F.cosine_similarity(new_input_embed[0], embed_layer.weight))
+    # print("detect nan,", torch.any(torch.isnan(F.cosine_similarity(new_input_embed[0], embed_layer.weight))))
+    # first_word_cossim = F.cosine_similarity(new_input_embed[0], embed_layer.weight)
+    # first_word_cossim[torch.isnan(first_word_cossim)] = -1
+    # print(len(first_word_cossim))
+    # print(torch.max(first_word_cossim))
+    # print(torch.argmax(first_word_cossim))
+    # second_word_cossim = F.cosine_similarity(new_input_embed[1], embed_layer.weight)
+    # second_word_cossim[torch.isnan(second_word_cossim)] = -1 
+    # print(torch.max(second_word_cossim))
+    # print(torch.argmax(second_word_cossim))
+    # third_word_cossim = F.cosine_similarity(new_input_embed[2], embed_layer.weight)
+    # third_word_cossim[torch.isnan(third_word_cossim)] = -1 
+    # print(torch.max(third_word_cossim))
+    # print(torch.argmax(third_word_cossim))
+    ret_list = []
+    for embed in new_input_embed:
+        # print("shape", embed.shape, embed_layer.weight.shape)
+        dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
+        # print("ret: ", torch.argmin(dist_ret.data.cpu()))
+        ret_list.append(torch.argmin(dist_ret.data.cpu()))
+    print("ret: ", ret_list)
+    ret_tokens = tokenizer.decode(torch.tensor(ret_list))
+    print("final result tokens:", ret_tokens)
+
 
     '''show loss curve'''
     plt.figure()
