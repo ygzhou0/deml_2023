@@ -104,9 +104,10 @@ def main():
             
             new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
             new_input_embed = torch.FloatTensor(new_input_embed_np).to(devices[0])
-            print(START_EMBED.shape, new_input_embed.shape)
+            # print(START_EMBED.shape, new_input_embed.shape)
             new_input_embed = torch.cat((START_EMBED, new_input_embed), dim=0)
             new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float16).to(devices[0])
+            # new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float32).to(devices[0])
             # new_input_embed[0][0] = embed_layer.weight[1].data
             new_input_embed.requires_grad_(True)
 
@@ -129,7 +130,9 @@ def main():
                 # new_input_embed = torch.mm(sftz.T, embed_layer.weight)
                 # print('sftz:', sftz)
                 # print("new input embed", new_input_embed, new_input_embed.shape, new_input_embed.requires_grad)
+                
                 # print("input embed loss", loss_func(new_input_embed, ori_input_embed))
+                # txt_file.write("input loss{}".format(loss_func(new_input_embed, ori_input_embed)))
 
                 '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
                 new_inputs = {'inputs_embeds': new_input_embed, 'attention_mask': target_attention_mask}
@@ -184,12 +187,22 @@ def main():
             # third_word_cossim[torch.isnan(third_word_cossim)] = -1 
             # print(torch.max(third_word_cossim))
             # print(torch.argmax(third_word_cossim))
+            '''show by L2 distance'''
+            # ret_list = []
+            # for embed in new_input_embed:
+            #     # print("shape", embed.shape, embed_layer.weight.shape)
+            #     dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
+            #     # print("ret: ", torch.argmin(dist_ret.data.cpu()))
+            #     ret_list.append(torch.argmin(dist_ret.data.cpu()))
+            '''show by cosine similarity'''
+            '''fabulous performance!'''
             ret_list = []
             for embed in new_input_embed:
-                # print("shape", embed.shape, embed_layer.weight.shape)
-                dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
-                # print("ret: ", torch.argmin(dist_ret.data.cpu()))
-                ret_list.append(torch.argmin(dist_ret.data.cpu()))
+                dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
+                # third_word_cossim[torch.isnan(third_word_cossim)] = -1
+                ret_list.append(torch.argmax(dist_ret.data))
+            
+            
             print("ret: ", ret_list)
             acc_cnt = 0
             for j in range(len(target_input_ids[0])):
