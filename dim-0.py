@@ -130,7 +130,7 @@ def main():
     # optim = torch.optim.Adam([z], lr=0.001)
     # scheduler = torch.optim.lr_scheduler.StepLR(optim, 300,
     #                                             gamma=0.2)
-    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1.3)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1.3)
     epochs = []
     loss_lst = []
     cos_sim_lst = []
