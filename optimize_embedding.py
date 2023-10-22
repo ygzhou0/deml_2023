@@ -78,7 +78,8 @@ def main():
 
     '''the original prompt we try to infer'''
     # prompt = "yes sir"
-    prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
+    # prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
+    prompt = "I fly at least once a month London to Beijing."
 
     '''get answer's hidden state'''
     target_input_ids, target_attention_mask, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
@@ -94,8 +95,9 @@ def main():
     loss_func = torch.nn.MSELoss(reduction='mean')
     # lr = 1 is not feasible
     # best hyperparameter combination: lr1000, epoch500
-    for lr in [1000]: # [1000, 5000, 10000]:
-        for total_epoch in [500]: # [500, 1000]:
+    # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
+    for lr in [1000]: #[5000]: # [1000, 5000, 10000]:
+        for total_epoch in [1000]: # [500, 1000]:
             '''try to init input embed'''
             size = (len(target_input_ids[0]) - 1, 4096)
             # means = torch.zeros(size)
@@ -103,17 +105,13 @@ def main():
             # new_input_embed = new_input_embed.type(torch.float16).to(devices[0])
             
             new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
-            new_input_embed = torch.FloatTensor(new_input_embed_np).to(devices[0])
-            # print(START_EMBED.shape, new_input_embed.shape)
-            new_input_embed = torch.cat((START_EMBED, new_input_embed), dim=0)
+            new_input_embed = torch.FloatTensor(new_input_embed_np)
             new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float16).to(devices[0])
-            # new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float32).to(devices[0])
-            # new_input_embed[0][0] = embed_layer.weight[1].data
             new_input_embed.requires_grad_(True)
 
             '''optimizer'''
             optim = torch.optim.SGD([new_input_embed], lr=lr)
-            # optim = torch.optim.Adam([z], lr=0.001)
+            # optim = torch.optim.AdamW([new_input_embed], lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
             # scheduler = torch.optim.lr_scheduler.StepLR(optim, 300,
             #                                             gamma=0.2)
             scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=0.995)
@@ -124,18 +122,11 @@ def main():
             # total_epoch = 0
 
             for i in range(total_epoch):
-                '''forward pass'''
-                # sftz = F.softmax(z / temperature, dim=0)
-                # sftz = torch.cat((START_EMBED.to(sftz.device), sftz), dim=1)    # add a fixed <start> token
-                # new_input_embed = torch.mm(sftz.T, embed_layer.weight)
-                # print('sftz:', sftz)
-                # print("new input embed", new_input_embed, new_input_embed.shape, new_input_embed.requires_grad)
-                
-                # print("input embed loss", loss_func(new_input_embed, ori_input_embed))
-                # txt_file.write("input loss{}".format(loss_func(new_input_embed, ori_input_embed)))
+                '''add start token'''
+                new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed), dim=1)
 
                 '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
-                new_inputs = {'inputs_embeds': new_input_embed, 'attention_mask': target_attention_mask}
+                new_inputs = {'inputs_embeds': new_input_embed_, 'attention_mask': target_attention_mask}
                 phi_relaxed = model(**new_inputs)
 
 
@@ -153,8 +144,8 @@ def main():
 
                 '''backward'''
                 optim.zero_grad()
-                loss.backward()
-                # (-cos_sim).sum().backward()
+                # loss.backward()
+                (-cos_sim).mean().backward()
                 optim.step()
                 scheduler.step()
                 # print("now tokens", torch.argmax(z, dim=0))
@@ -168,7 +159,7 @@ def main():
 
 
             '''show input embedding result'''
-            new_input_embed = new_input_embed.squeeze(0)
+            new_input_embed = new_input_embed_.squeeze(0)
             print("shapes", embed_layer.weight.shape, new_input_embed.shape)
             print("detect nan", torch.any(torch.isnan(new_input_embed)))
             print("detect nan", torch.any(torch.isnan(embed_layer.weight)))
@@ -197,9 +188,17 @@ def main():
             '''show by cosine similarity'''
             '''fabulous performance!'''
             ret_list = []
-            for embed in new_input_embed:
+            for j, embed in enumerate(new_input_embed):
                 dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
                 # third_word_cossim[torch.isnan(third_word_cossim)] = -1
+                # print(dist_ret.shape)
+                # print(target_input_ids)
+                # print("correct position and its cosine value:", target_input_ids.cpu()[0][j], dist_ret[target_input_ids.cpu()[0][j]])
+                '''test the ranking of wrong tokens--most in top 3'''
+                print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
+                if torch.argmax(dist_ret.data) != target_input_ids.cpu()[0][j]:
+                    print("correct position and its cosine value:", target_input_ids.cpu()[0][j], dist_ret[target_input_ids.cpu()[0][j]])
+                    print("topk value", torch.topk(dist_ret, 10))
                 ret_list.append(torch.argmax(dist_ret.data))
             
             
