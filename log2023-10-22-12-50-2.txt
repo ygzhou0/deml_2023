@@ -1,0 +1,16 @@
+lr1000, epoch1000, F length 5, acc0.7142857142857143, final loss0.033233642578125, cos sim0.99462890625, result token: 
+<s> I fly at least once a month London库 Be China world</s>
+
+
+lr1000, epoch1000, F length 10, acc0.7142857142857143, final loss0.27099609375, cos sim0.9521484375, result token: 
+<s> I fly at least onceoren month London to Be China Київ</s>
+
+
+lr1000, epoch1000, F length 20, acc0.7857142857142857, final loss0.217529296875, cos sim0.96240234375, result token: 
+<s> I fly at least once a month London to Be China Melbourne</s>
+
+
+lr1000, epoch1000, F length 40, acc0.7142857142857143, final loss0.1524658203125, cos sim0.9736328125, result token: 
+<s> I fly at least once a month London to BE Chineseije<s>
+
+

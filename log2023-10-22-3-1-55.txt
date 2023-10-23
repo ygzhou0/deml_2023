@@ -1,144 +1,16 @@
-lr1000, epoch500, F length 1, acc0.6428571428571429, final loss0.236328125, cos sim0.95849609375, result token: 
-<s> I fly at least once often month London to<s> China very<s>
+lr1000, epoch1000, F length 5, acc0.7142857142857143, final loss0.02740478515625, cos sim0.99560546875, result token: 
+<s> I fly at least once a month London to Being China)$.<s>
 
 
-lr1000, epoch500, F length 5, acc0.6428571428571429, final loss0.15771484375, cos sim0.97314453125, result token: 
-<s> I fly at least once every month Londonordinary Be China pra</s>
+lr1000, epoch1000, F length 10, acc0.7857142857142857, final loss0.279296875, cos sim0.951171875, result token: 
+<s> I fly at least once a month London to Be China Dallas</s>
 
 
-lr1000, epoch500, F length 10, acc0.5, final loss0.335693359375, cos sim0.94287109375, result token: 
-<s> I long at least once a School London Hen ', calmria Sm
+lr1000, epoch1000, F length 20, acc0.7142857142857143, final loss0.383056640625, cos sim0.9326171875, result token: 
+<s> I fly at least once a month London<s> Be Chinaloor<s>
 
 
-lr1000, epoch500, F length 20, acc0.7142857142857143, final loss0.1864013671875, cos sim0.96728515625, result token: 
-<s> I fly at least once a month London to<s> China Serial spl
-
-
-lr1000, epoch500, F length 40, acc0.7857142857142857, final loss0.18798828125, cos sim0.9677734375, result token: 
-<s> I fly at least once a month London to Be ChinaNL</s>
-
-
-lr1000, epoch500, F length 60, acc0.6428571428571429, final loss0.1793212890625, cos sim0.96923828125, result token: 
-<s> I fly at leastative every month London to Be Chinaческий</s>
-
-
-lr1000, epoch1000, F length 1, acc0.7142857142857143, final loss0.18408203125, cos sim0.96875, result token: 
-<s> I fly at least once aous London to Be China periods</s>
-
-
-lr1000, epoch1000, F length 5, acc0.7142857142857143, final loss0.1339111328125, cos sim0.97705078125, result token: 
-<s> I fly at least twice a month London to Be Chinaland</s>
-
-
-lr1000, epoch1000, F length 10, acc0.7857142857142857, final loss0.1416015625, cos sim0.97607421875, result token: 
-<s> I fly at least oncea month London to Beijinburgh<s>
-
-
-lr1000, epoch1000, F length 20, acc0.7142857142857143, final loss0.1385498046875, cos sim0.9765625, result token: 
-<s> I fly at least once per month London to Be China November<s>
-
-
-lr1000, epoch1000, F length 40, acc0.8571428571428571, final loss0.131591796875, cos sim0.9775390625, result token: 
-<s> I fly at least once a month London to BeijS</s>
-
-
-lr1000, epoch1000, F length 60, acc0.7857142857142857, final loss0.228759765625, cos sim0.9609375, result token: 
-<s> I fly at least once<s> month London to Beij Charles<s>
-
-
-lr5000, epoch500, F length 1, acc0.35714285714285715, final loss0.5859375, cos sim0.900390625, result token: 
-<s>ny fly at least Atlantic a� and空 beQu Wy
-
-
-lr5000, epoch500, F length 5, acc0.7142857142857143, final loss0.316162109375, cos sim0.9453125, result token: 
-<s> I fly at least twice a month London to meijo<s>
-
-
-lr5000, epoch500, F length 10, acc0.7142857142857143, final loss0.251708984375, cos sim0.95703125, result token: 
-<s> I fly at leastR a month London<s> Beij�</s>
-
-
-lr5000, epoch500, F length 20, acc0.7142857142857143, final loss0.305419921875, cos sim0.94677734375, result token: 
-<s> I fly at least once a month London to I<s>erva<s>
-
-
-lr5000, epoch500, F length 40, acc0.6428571428571429, final loss0.33056640625, cos sim0.943359375, result token: 
-<s> I flying at least once every month London to Be Chinaody</s>
-
-
-lr5000, epoch500, F length 60, acc0.6428571428571429, final loss0.3701171875, cos sim0.93701171875, result token: 
-<s> Ion at least onceど month London to Be China Dresden</s>
-
-
-lr5000, epoch1000, F length 1, acc0.35714285714285715, final loss0.486083984375, cos sim0.91796875, result token: 
-<s> I fly At least girl Er soiao has Be Chinau London
-
-
-lr5000, epoch1000, F length 5, acc0.42857142857142855, final loss0.55859375, cos sim0.90478515625, result token: 
-<s> I flying at me onceive month LondoniveO,ive<s>
-
-
-lr5000, epoch1000, F length 10, acc0.7142857142857143, final loss0.294921875, cos sim0.94970703125, result token: 
-<s> I<s> at least once request month London to Beij Asia</s>
-
-
-lr5000, epoch1000, F length 20, acc0.6428571428571429, final loss0.65625, cos sim0.88916015625, result token: 
-<s> I fly at least Iarte month London to Be<s> I<s>
-
-
-lr5000, epoch1000, F length 40, acc0.6428571428571429, final loss0.3056640625, cos sim0.9482421875, result token: 
-<s> I fly ath oncety month London to Be Chinaalia</s>
-
-
-lr5000, epoch1000, F length 60, acc0.7857142857142857, final loss0.2349853515625, cos sim0.9599609375, result token: 
-<s> I村 at least once a month London to Beij China<s>
-
-
-lr10000, epoch500, F length 1, acc0.5714285714285714, final loss0.44189453125, cos sim0.92529296875, result token: 
-<s> orders me at least oncearte month May to Beij\}$.<s>
-
-
-lr10000, epoch500, F length 5, acc0.35714285714285715, final loss0.5322265625, cos sim0.90966796875, result token: 
-<s> I fly my I my my my London London Be have have have
-
-
-lr10000, epoch500, F length 10, acc0.5, final loss0.453369140625, cos sim0.92333984375, result token: 
-<s> I fact at least twiceically month London"); Be have也<s>
-
-
-lr10000, epoch500, F length 20, acc0.5, final loss0.4716796875, cos sim0.91943359375, result token: 
-<s> I fly at least Mundoa month picturewy Beburg and and
-
-
-lr10000, epoch500, F length 40, acc0.42857142857142855, final loss0.466552734375, cos sim0.92041015625, result token: 
-<s> grasp fly and leastattle and<s> London to Be I and</s>
-
-
-lr10000, epoch500, F length 60, acc0.5714285714285714, final loss0.41259765625, cos sim0.93017578125, result token: 
-<s>ive:$ at least once me month London to Be Chinahips<s>
-
-
-lr10000, epoch1000, F length 1, acc0.35714285714285715, final loss0.46826171875, cos sim0.92041015625, result token: 
-<s> I me at least twice York中 favor to beujYou<s>
-
-
-lr10000, epoch1000, F length 5, acc0.35714285714285715, final loss0.541015625, cos sim0.90869140625, result token: 
-<s> I flying atin fois Santos has<s> I Beij Santos<s>
-
-
-lr10000, epoch1000, F length 10, acc0.21428571428571427, final loss0.5888671875, cos sim0.89990234375, result token: 
-<s>ering mehensor Ious太太 to Beousite</s>
-
-
-lr10000, epoch1000, F length 20, acc0.42857142857142855, final loss0.45849609375, cos sim0.92236328125, result token: 
-<s> green flying田 least onceican month London to be haverai<s>
-
-
-lr10000, epoch1000, F length 40, acc0.21428571428571427, final loss1.1865234375, cos sim0.79931640625, result token: 
-<s> wwwisy at<s> Youationation London Toation anddk<s>
-
-
-lr10000, epoch1000, F length 60, acc0.2857142857142857, final loss0.56591796875, cos sim0.904296875, result token: 
-<s> homonymes homonymes at leastський aident kind kind beど picture</s>
+lr1000, epoch1000, F length 40, acc0.7142857142857143, final loss0.1927490234375, cos sim0.966796875, result token: 
+<s> I fly at least once per month London to Be China London<s>
 
 
