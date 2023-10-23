@@ -59,9 +59,9 @@ def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_att
 
             print("phi(x*)", next_.hidden_states, next_.hidden_states.shape)
     elif input_embed != None:
-        new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask}
+        # new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask}
         raise NotImplementedError
-    return target_input_ids, ori_input_embed, next_.hidden_states
+    return target_input_ids, target_attention_mask, ori_input_embed, next_.hidden_states
 
 
 def get_relaxed_vector(size: tuple, method: str, device: str):
@@ -96,20 +96,23 @@ def main():
     tokenizer, model = get_model(devices=devices)
 
     '''fix <start> token'''
-    START_EMBED = torch.zeros(tokenizer.vocab_size, 1).type(torch.float16)
-    START_EMBED[1][0] = 1    # fix the first token as <start>
     embed_layer = model.model.get_input_embeddings()
+    START_EMBED = embed_layer.weight[1].data
+    START_EMBED = START_EMBED.unsqueeze(0).to(devices[0])
+    START_EMBED.requires_grad_(False)
 
     '''the original prompt we try to infer'''
     prompt = "yes sir"
 
     '''get answer's hidden state'''
-    target_input_ids, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
+    target_input_ids, target_attention_mask, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
                                                                              model, prompt=prompt)
 
     '''relax word vectors'''
-    z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0]) - 1), 
-                           method="zero", device=devices[0])
+    # z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0]) - 1), 
+    #                        method="zero", device=devices[0])
+    z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0])-1), 
+                           method="gaussian", device=devices[0])
     temperature = 0.05
 
     # given the correct state
@@ -118,7 +121,7 @@ def main():
     # z[8889][1] = 0.01
 
     '''show low confidence word'''
-    show_low_conf_word(tokenizer, z, temperature, START_EMBED)
+    # show_low_conf_word(tokenizer, z, temperature, START_EMBED)
 
     '''cutting layers'''
     # total 32 layers, already cut to 8 layers. details in modeling_llama.py
@@ -126,30 +129,29 @@ def main():
 
     '''define loss func'''
     loss_func = torch.nn.MSELoss(reduction='mean')
-    optim = torch.optim.SGD([z], lr=1)
+    # lr = 1000
+    lr = 0.01
+    optim = torch.optim.SGD([z], lr=lr)
     # optim = torch.optim.Adam([z], lr=0.001)
     # scheduler = torch.optim.lr_scheduler.StepLR(optim, 300,
     #                                             gamma=0.2)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1.3)
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=0.995)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1)
     epochs = []
     loss_lst = []
     cos_sim_lst = []
 
-    total_epoch = 100
+    total_epoch = 500
 
     for i in range(total_epoch):
         '''forward pass'''
         sftz = F.softmax(z / temperature, dim=0)
-        sftz = torch.cat((START_EMBED.to(sftz.device), sftz), dim=1)    # add a fixed <start> token
         new_input_embed = torch.mm(sftz.T, embed_layer.weight)
-        # print('sftz:', sftz)
-        # print("new input embed", new_input_embed)
-        # print("input embed loss", loss_func(new_input_embed, ori_input_embed))
-
 
         '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
-        new_input_embed = new_input_embed.unsqueeze(dim=0)
-        new_inputs = {'inputs_embeds': new_input_embed}
+        new_input_embed_ = new_input_embed.unsqueeze(dim=0)
+        new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed_), dim=1)
+        new_inputs = {'inputs_embeds': new_input_embed_}
         phi_relaxed = model(**new_inputs)
         '''compute loss'''
         loss = loss_func(phi_relaxed.hidden_states, next_hidden_states)
@@ -159,25 +161,27 @@ def main():
         '''compute similarity'''
         # cosine similarity will increase steadily!
         cos_sim = F.cosine_similarity(phi_relaxed.hidden_states, next_hidden_states, dim=2)
-        print("cosine sim:", cos_sim)
-        cos_sim_lst.append(cos_sim.detach().cpu()[0][-1])
+        print("cosine sim:", cos_sim.mean())
+        cos_sim_lst.append(cos_sim.data.cpu()[0][-1])
 
 
         '''backward'''
         optim.zero_grad()
-        loss.backward()
-        # (-cos_sim).sum().backward()
-        # print("z_gradient", z.grad[8889] * 10000)
+        # loss.backward()
+        (-cos_sim).sum().backward()
+        print("z_gradient yes", z.grad[4874] * 10000)
+        print("z_gradient sir", z.grad[8889] * 10000)
         optim.step()
         scheduler.step()
         print("now tokens", torch.argmax(z, dim=0))
         epochs.append(i)
         loss_lst.append(loss.data.cpu())
         if i % 20 == 0:
-            tmp_input_ids = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0)  # add <start> token
+            # tmp_input_ids = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0)  # add <start> token
+            tmp_input_ids = torch.argmax(z, dim=0)
             print("recovered text:{}".format(tokenizer.decode(list(tmp_input_ids))))
-            print("acc:{}".format(sum((target_input_ids==tmp_input_ids)[0]) / len(target_input_ids[0])) )
-            print("cosine sim:{}".format(torch.mean(cos_sim)))
+            print("acc:{}".format(sum((target_input_ids[...,1:]==tmp_input_ids)[0]) / len(target_input_ids[0])) )
+            print("cosine sim:{}".format(cos_sim.mean()))
 
     print("z", z)
     print("z[1]", z[4874])
@@ -186,29 +190,51 @@ def main():
     print("z_max[2]", torch.max(z[..., 1]))
 
     '''show result'''
-    tmp_input_ids = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0)
+    # tmp_input_ids = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0)
+    tmp_input_ids = torch.argmax(z, dim=0)
     print("final\nrecovered text:{}".format(tokenizer.decode(list(tmp_input_ids))))
-    print("acc:{}".format(sum((target_input_ids==tmp_input_ids)[0]) / len(target_input_ids[0])) )
+    print("acc:{}".format(sum((target_input_ids[...,1:]==tmp_input_ids)[0]) / len(target_input_ids[0])) )
 
 
     '''calculate discrete loss'''
-    with torch.no_grad():
-        # print("original input ids", recover_token['input_ids'])
-        recover_input = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0) # add <start> token
-        recover_input_ids = recover_input.unsqueeze(dim=0).to(model.device)
-        recovered_inputs = {'input_ids': recover_input_ids}
-        recovered_state = model(**recovered_inputs)
-        recovered_loss = loss_func(recovered_state.hidden_states, next_hidden_states)
-        print("discrete recover loss", recovered_loss)
+    # with torch.no_grad():
+    #     # print("original input ids", recover_token['input_ids'])
+    #     recover_input = torch.cat((torch.tensor([1]).to(z.device), torch.argmax(z, dim=0)), dim=0) # add <start> token
+    #     recover_input_ids = recover_input.unsqueeze(dim=0).to(model.device)
+    #     recovered_inputs = {'input_ids': recover_input_ids}
+    #     recovered_state = model(**recovered_inputs)
+    #     recovered_loss = loss_func(recovered_state.hidden_states, next_hidden_states)
+    #     print("discrete recover loss", recovered_loss)
 
 
     '''show low confidence word'''
-    show_low_conf_word(tokenizer, z, temperature, START_EMBED)
+    # show_low_conf_word(tokenizer, z, temperature, START_EMBED)
 
     '''show loss curve'''
-    draw_curve(epochs, loss_lst, 'L2 loss')
+    plt.figure()
+    ax = plt.axes()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
-    # draw_curve(epochs, cos_sim_lst, 'cosine sim')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
+    plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='L2 loss')
+    plt.legend()
+    plt.title('L2 Loss Curve')
+    plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+
+
+    plt.figure()
+    ax = plt.axes()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plt.xlabel('epoch')
+    plt.ylabel('cosine sim')
+    plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
+    plt.legend()
+    plt.title('cosine similarity Curve')
+    plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
 if __name__ == "__main__":
     main()
