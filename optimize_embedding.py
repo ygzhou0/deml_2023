@@ -109,7 +109,7 @@ def main():
     # best hyperparameter combination: lr1000, epoch500
     # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
 
-    for lr in [100, 500, 1000]: #[1000, 5000, 10000]:
+    for lr in [100, 500, 1000, 5000]: #[1000, 5000, 10000]:
         for total_epoch in [500, 1000]:
             '''try to init input embed'''
             size = (len(target_input_ids[0]) - 1, 4096)
@@ -153,7 +153,7 @@ def main():
                 '''compute similarity'''
                 # cosine similarity will increase steadily!
                 cos_sim = F.cosine_similarity(phi_relaxed.hidden_states, next_hidden_states, dim=2)
-                print("cosine sim:", cos_sim.mean())
+                print("cosine sim:", cos_sim.mean(), cos_sim.shape)
                 cos_sim_lst.append(cos_sim.data.cpu()[0][-1])
 
 
@@ -239,7 +239,24 @@ def main():
             txt_file.write("lr{}, epoch{}, acc{}, final loss{}, cos sim{}, result token: \n{}\n\n\n".format(lr, total_epoch, acc, loss, cos_sim.mean(), ret_tokens))
 
 
-            # '''show loss curve'''
+            '''show final cos sim with position'''
+            plt.figure()
+            ax = plt.axes()
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            plt.xlabel('position')
+            plt.ylabel('cos sim')
+            cos_sim = cos_sim.squeeze(0).data.cpu()
+            print("ploting cosine sim: ", cos_sim.shape)
+            positions_ = np.arange(len(cos_sim))
+            plt.plot(positions_, cos_sim, linewidth=1, linestyle='solid', label='cosine_similarity')
+            plt.legend()
+            plt.title('cosine similarity Curve')
+            plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+
+
+            '''show loss curve'''
             # plt.figure()
             # ax = plt.axes()
             # ax.spines['top'].set_visible(False)
