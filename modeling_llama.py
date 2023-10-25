@@ -876,7 +876,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-            # print("input embeds (for first start token)", inputs_embeds)
+            # print("input embeds answer (for first start token)", inputs_embeds)
             # NOTE: start embedding already right
         # embed positions
         if attention_mask is None:
@@ -893,7 +893,7 @@ class LlamaModel(LlamaPreTrainedModel):
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
         )
-
+        # print("input_embeds", inputs_embeds)
         hidden_states = inputs_embeds
 
         # if self.gradient_checkpointing and self.training:   # modified
@@ -912,10 +912,11 @@ class LlamaModel(LlamaPreTrainedModel):
         for idx, decoder_layer in enumerate(self.layers):
             # or to modifiy this, if idx > some certain number, cut the forward process?
             # cut to 8 layers
-            if idx >= 8:
-                continue
+            # if idx >= 16:
+            #     # print("cutting to 16 layers")
+            #     continue
 
-            print(idx, hidden_states)
+            # print(idx, hidden_states)
 
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -932,10 +933,11 @@ class LlamaModel(LlamaPreTrainedModel):
                         return module(*inputs, past_key_value, output_attentions, padding_mask=padding_mask)
 
                     return custom_forward
-
-                layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
-                )
+                # NOTE: modified, yongji's code
+                layer_outputs = torch.utils.checkpoint.checkpoint(create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids, use_reentrant=False)
+                # layer_outputs = torch.utils.checkpoint.checkpoint(
+                #     create_custom_forward(decoder_layer), hidden_states, attention_mask, position_ids
+                # )
             else:
                 layer_outputs = decoder_layer(
                     hidden_states,
@@ -1063,7 +1065,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         )
 
         hidden_states = outputs[0]
-        # print(hidden_states)
+        # print("model hidden state", hidden_states)
         if self.config.pretraining_tp > 1:
             lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
             logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]

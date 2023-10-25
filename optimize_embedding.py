@@ -69,6 +69,11 @@ def main():
     devices=['cuda:0']
     tokenizer, model = get_model(devices=devices)
 
+
+    '''try 32 layers with yongji's method'''
+    # model.model.layers = model.model.layers[:8]
+    model.model.layers = model.model.layers
+
     '''fix <start> token'''
     embed_layer = model.model.get_input_embeddings()
     START_EMBED = embed_layer.weight[1].data
@@ -76,10 +81,17 @@ def main():
     START_EMBED = START_EMBED.unsqueeze(0).to(devices[0])
     START_EMBED.requires_grad_(False)
 
+    '''freeze model parameter'''
+    print(model.parameters())
+    for param in model.parameters():
+        print(param)
+        param.requires_grad = False
+    # o=1/0
+
     '''the original prompt we try to infer'''
     # prompt = "yes sir"
-    # prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
-    prompt = "I fly at least once a month London to Beijing."
+    prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
+    # prompt = "I fly at least once a month London to Beijing."
 
     '''get answer's hidden state'''
     target_input_ids, target_attention_mask, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
@@ -96,15 +108,17 @@ def main():
     # lr = 1 is not feasible
     # best hyperparameter combination: lr1000, epoch500
     # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
-    for lr in [1000]: #[5000]: # [1000, 5000, 10000]:
-        for total_epoch in [1000]: # [500, 1000]:
+
+    for lr in [100, 500, 1000]: #[1000, 5000, 10000]:
+        for total_epoch in [500, 1000]:
             '''try to init input embed'''
             size = (len(target_input_ids[0]) - 1, 4096)
             # means = torch.zeros(size)
             # new_input_embed = torch.normal(mean=means, std=0.1)
             # new_input_embed = new_input_embed.type(torch.float16).to(devices[0])
             
-            new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
+            # new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
+            new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)
             new_input_embed = torch.FloatTensor(new_input_embed_np)
             new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float16).to(devices[0])
             new_input_embed.requires_grad_(True)
@@ -120,6 +134,7 @@ def main():
             cos_sim_lst = []
 
             # total_epoch = 0
+            nan_exist = None
 
             for i in range(total_epoch):
                 '''add start token'''
@@ -142,10 +157,18 @@ def main():
                 cos_sim_lst.append(cos_sim.data.cpu()[0][-1])
 
 
+                '''detect nan'''
+                nan_exist = torch.any(torch.isnan(cos_sim))
+                print("cos sim nan", nan_exist)
+                if nan_exist:
+                    continue
+
+
                 '''backward'''
                 optim.zero_grad()
-                # loss.backward()
-                (-cos_sim).mean().backward()
+                # loss.backward(inputs=[new_input_embed])
+                (-cos_sim).mean().backward(inputs=[new_input_embed])
+                # (-cos_sim).mean().backward(inputs=[phi_relaxed.hidden_states])
                 optim.step()
                 scheduler.step()
                 # print("now tokens", torch.argmax(z, dim=0))
@@ -157,7 +180,9 @@ def main():
                 #     print("acc:{}".format(sum((target_input_ids==tmp_input_ids)[0]) / len(target_input_ids[0])) )
                 #     print("cosine sim:{}".format(torch.mean(cos_sim)))
 
-
+            if nan_exist:
+                txt_file.write("lr{}, epoch{}, NAN!!\n\n\n".format(lr, total_epoch))
+                continue
             '''show input embedding result'''
             new_input_embed = new_input_embed_.squeeze(0)
             print("shapes", embed_layer.weight.shape, new_input_embed.shape)
@@ -214,31 +239,31 @@ def main():
             txt_file.write("lr{}, epoch{}, acc{}, final loss{}, cos sim{}, result token: \n{}\n\n\n".format(lr, total_epoch, acc, loss, cos_sim.mean(), ret_tokens))
 
 
-            '''show loss curve'''
-            plt.figure()
-            ax = plt.axes()
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
+            # '''show loss curve'''
+            # plt.figure()
+            # ax = plt.axes()
+            # ax.spines['top'].set_visible(False)
+            # ax.spines['right'].set_visible(False)
 
-            plt.xlabel('epoch')
-            plt.ylabel('loss')
-            plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='L2 loss')
-            plt.legend()
-            plt.title('L2 Loss Curve')
-            plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+            # plt.xlabel('epoch')
+            # plt.ylabel('loss')
+            # plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='L2 loss')
+            # plt.legend()
+            # plt.title('L2 Loss Curve')
+            # plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
 
-            plt.figure()
-            ax = plt.axes()
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
+            # plt.figure()
+            # ax = plt.axes()
+            # ax.spines['top'].set_visible(False)
+            # ax.spines['right'].set_visible(False)
 
-            plt.xlabel('epoch')
-            plt.ylabel('cosine sim')
-            plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
-            plt.legend()
-            plt.title('cosine similarity Curve')
-            plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+            # plt.xlabel('epoch')
+            # plt.ylabel('cosine sim')
+            # plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
+            # plt.legend()
+            # plt.title('cosine similarity Curve')
+            # plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
 
 if __name__ == "__main__":
