@@ -72,7 +72,7 @@ def main():
 
     '''try 32 layers with yongji's method'''
     # model.model.layers = model.model.layers[:8]
-    model.model.layers = model.model.layers
+    model.model.layers = model.model.layers[:16]
 
     '''fix <start> token'''
     embed_layer = model.model.get_input_embeddings()
@@ -82,17 +82,18 @@ def main():
     START_EMBED.requires_grad_(False)
 
     '''freeze model parameter'''
-    print(model.parameters())
+    # print(model.parameters())
     for param in model.parameters():
-        print(param)
+        # print(param)
         param.requires_grad = False
-    # o=1/0
 
     '''the original prompt we try to infer'''
     # prompt = "yes sir"
-    prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
-    # prompt = "I fly at least once a month London to Beijing."
-
+    # prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
+    # prompt = "April 15th flight 108 return 26th Apr flight 105. My mother and I flew from JFK to Dublin and return. We were in economy from JFK to DUB and in Premier class on the return trip. Both were great experiences and on Aer Lingus new A330. The food was excellent in both cabins. We opted for the succulent steal ($18) in Economy and it was delicious. Crew were lovely. On return we were in the new Premier class cabin. The crew the food the service was terrific."
+    # prompt = "You get what you pay for. I was forced to give at least one star otherwise I would have given zero for seat comfort and inflight entertainment (there is none). I am not a tall person and I have never had my knees so scrunched up on any other airline."
+    prompt = "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" "
+    
     '''get answer's hidden state'''
     target_input_ids, target_attention_mask, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
               model, prompt=prompt)
@@ -105,12 +106,13 @@ def main():
 
     '''define loss func'''
     loss_func = torch.nn.MSELoss(reduction='mean')
+    # loss_func = torch.nn.MSELoss(reduction='sum')
     # lr = 1 is not feasible
     # best hyperparameter combination: lr1000, epoch500
     # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
 
-    for lr in [100, 500, 1000, 5000]: #[1000, 5000, 10000]:
-        for total_epoch in [500, 1000]:
+    for lr in [0.1 * len(target_input_ids[0])]: #[100, 500, 1000, 5000]: #[1000, 5000, 10000]:
+        for total_epoch in [500]: #[500, 1000]:
             '''try to init input embed'''
             size = (len(target_input_ids[0]) - 1, 4096)
             # means = torch.zeros(size)
@@ -128,7 +130,8 @@ def main():
             # optim = torch.optim.AdamW([new_input_embed], lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
             # scheduler = torch.optim.lr_scheduler.StepLR(optim, 300,
             #                                             gamma=0.2)
-            scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=0.995)
+            # scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=0.995)
+            scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1)
             epochs = []
             loss_lst = []
             cos_sim_lst = []
@@ -146,6 +149,7 @@ def main():
 
 
                 '''compute loss'''
+                # loss = loss_func(phi_relaxed.hidden_states.type(torch.float32), next_hidden_states.type(torch.float32))
                 loss = loss_func(phi_relaxed.hidden_states, next_hidden_states)
                 print("{} epoch, {} loss".format(i, loss.data))
 
@@ -166,8 +170,8 @@ def main():
 
                 '''backward'''
                 optim.zero_grad()
-                # loss.backward(inputs=[new_input_embed])
-                (-cos_sim).mean().backward(inputs=[new_input_embed])
+                # loss.backward(inputs=[new_input_embed])   # lr = 0.1 * len(target_input_ids[0])
+                (-cos_sim).sum().backward(inputs=[new_input_embed])
                 # (-cos_sim).mean().backward(inputs=[phi_relaxed.hidden_states])
                 optim.step()
                 scheduler.step()
@@ -188,28 +192,33 @@ def main():
             print("shapes", embed_layer.weight.shape, new_input_embed.shape)
             print("detect nan", torch.any(torch.isnan(new_input_embed)))
             print("detect nan", torch.any(torch.isnan(embed_layer.weight)))
-            # print("final cosine sim,", F.cosine_similarity(new_input_embed[0], embed_layer.weight))
-            # print("detect nan,", torch.any(torch.isnan(F.cosine_similarity(new_input_embed[0], embed_layer.weight))))
-            # first_word_cossim = F.cosine_similarity(new_input_embed[0], embed_layer.weight)
-            # first_word_cossim[torch.isnan(first_word_cossim)] = -1
-            # print(len(first_word_cossim))
-            # print(torch.max(first_word_cossim))
-            # print(torch.argmax(first_word_cossim))
-            # second_word_cossim = F.cosine_similarity(new_input_embed[1], embed_layer.weight)
-            # second_word_cossim[torch.isnan(second_word_cossim)] = -1 
-            # print(torch.max(second_word_cossim))
-            # print(torch.argmax(second_word_cossim))
-            # third_word_cossim = F.cosine_similarity(new_input_embed[2], embed_layer.weight)
-            # third_word_cossim[torch.isnan(third_word_cossim)] = -1 
-            # print(torch.max(third_word_cossim))
-            # print(torch.argmax(third_word_cossim))
             '''show by L2 distance'''
-            # ret_list = []
-            # for embed in new_input_embed:
-            #     # print("shape", embed.shape, embed_layer.weight.shape)
-            #     dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
-            #     # print("ret: ", torch.argmin(dist_ret.data.cpu()))
-            #     ret_list.append(torch.argmin(dist_ret.data.cpu()))
+            ret_list = []
+            for embed in new_input_embed:
+                # print("shape", embed.shape, embed_layer.weight.shape)
+                dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
+                # print("ret: ", torch.argmin(dist_ret.data.cpu()))
+                ret_list.append(torch.argmin(dist_ret.data.cpu()))
+            
+            print("ret: ", ret_list)
+            acc_cnt = 0
+            for j in range(len(target_input_ids[0])):
+                if target_input_ids[0][j] == ret_list[j]:
+                    acc_cnt += 1
+            acc = acc_cnt / len(target_input_ids[0])
+            print("acc: ", acc)
+            ret_tokens = tokenizer.decode(torch.tensor(ret_list))
+            print("final result tokens:", ret_tokens)
+            txt_file.write("loss decode: lr{}, epoch{}, acc{}, final loss{}, cos sim{}, result token: \n{}\n\n\n".format(lr, total_epoch, acc, loss, cos_sim.mean(), ret_tokens))
+
+
+            # indexes = (cos_sim <= 0.85)
+            # print(indexes)
+            # tensor_output = torch.tensor(ret_list)
+            # wrong_tokens = tokenizer.decode(tensor_output[indexes])
+            # print("wrong tokens", wrong_tokens)
+
+
             '''show by cosine similarity'''
             '''fabulous performance!'''
             ret_list = []
@@ -236,9 +245,25 @@ def main():
             print("acc: ", acc)
             ret_tokens = tokenizer.decode(torch.tensor(ret_list))
             print("final result tokens:", ret_tokens)
-            txt_file.write("lr{}, epoch{}, acc{}, final loss{}, cos sim{}, result token: \n{}\n\n\n".format(lr, total_epoch, acc, loss, cos_sim.mean(), ret_tokens))
+            txt_file.write("cosine decode: lr{}, epoch{}, acc{}, final loss{}, cos sim{}, result token: \n{} ".format(lr, total_epoch, acc, loss, cos_sim.mean(), ret_tokens))
 
 
+
+            '''calculate discrete loss'''
+            with torch.no_grad():
+                # print("original input ids", recover_token['input_ids'])
+                recover_input = torch.tensor(ret_list) # add <start> token
+                recover_input_ids = recover_input.unsqueeze(dim=0).to(model.device)
+                recovered_inputs = {'input_ids': recover_input_ids}
+                recovered_state = model(**recovered_inputs)
+                recovered_loss = loss_func(recovered_state.hidden_states, next_hidden_states)
+                print("discrete recover loss", recovered_loss)
+                txt_file.write("\ndiscrete recover loss {}\n\n\n".format(recovered_loss))
+                rocover_cos_sim = F.cosine_similarity(recovered_state.hidden_states, next_hidden_states, dim=2)
+                print("rocover_cos_sim:", rocover_cos_sim.mean(), rocover_cos_sim.shape)
+                txt_file.write("\ndiscrete recover cosine sim {}\n\n\n".format(rocover_cos_sim.mean()))
+
+            
             '''show final cos sim with position'''
             plt.figure()
             ax = plt.axes()
@@ -253,7 +278,34 @@ def main():
             plt.plot(positions_, cos_sim, linewidth=1, linestyle='solid', label='cosine_similarity')
             plt.legend()
             plt.title('cosine similarity Curve')
+            plt.savefig("cosine-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+
+            '''show final loss with position'''
+            plt.figure()
+            ax = plt.axes()
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+            plt.xlabel('position')
+            plt.ylabel('loss')
+            # loss_func_show = torch.nn.MSELoss(reduction="none")
+            print("shapes,", phi_relaxed.hidden_states.shape, next_hidden_states.shape)
+            loss_show = torch.norm(phi_relaxed.hidden_states-next_hidden_states, p=2, dim=2).squeeze(0).data.cpu()
+            # cos_sim = cos_sim.squeeze(0).data.cpu()
+            print("ploting L2 loss: ", loss_show, loss_show.shape)
+            positions_ = np.arange(len(loss_show))
+            plt.plot(positions_, loss_show, linewidth=1, linestyle='solid', label='L2 loss')
+            plt.legend()
+            plt.title('loss Curve')
             plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+
+
+            indexes = (cos_sim <= 0.85)
+            print(indexes)
+            tensor_output = torch.tensor(ret_list)
+            wrong_tokens = tokenizer.decode(tensor_output[indexes])
+            print("wrong tokens", wrong_tokens)
+
 
 
             '''show loss curve'''
@@ -281,7 +333,7 @@ def main():
             # plt.legend()
             # plt.title('cosine similarity Curve')
             # plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
-
+    txt_file.close()
 
 if __name__ == "__main__":
     main()
