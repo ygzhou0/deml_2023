@@ -69,7 +69,6 @@ def main():
     devices=['cuda:0']
     tokenizer, model = get_model(devices=devices)
 
-
     '''try 32 layers with yongji's method'''
     # model.model.layers = model.model.layers[:8]
     model.model.layers = model.model.layers[:16]
@@ -92,8 +91,12 @@ def main():
     # prompt = """We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. "I am very, very glad to see you," he went on. "Well, how are you? Eh? When did you come?" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails. """
     # prompt = "April 15th flight 108 return 26th Apr flight 105. My mother and I flew from JFK to Dublin and return. We were in economy from JFK to DUB and in Premier class on the return trip. Both were great experiences and on Aer Lingus new A330. The food was excellent in both cabins. We opted for the succulent steal ($18) in Economy and it was delicious. Crew were lovely. On return we were in the new Premier class cabin. The crew the food the service was terrific."
     # prompt = "You get what you pay for. I was forced to give at least one star otherwise I would have given zero for seat comfort and inflight entertainment (there is none). I am not a tall person and I have never had my knees so scrunched up on any other airline."
-    prompt = "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" "
-    
+    # prompt = "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" "
+    # prompt = "Writing this on behalf of my 87yr old mother who had flown to the UK on a 6 wk trip to see family. Aegean had been informed she required a wheelchair and we received confirmation it was booked both ways. From Rhodes to London they had no details regarding the chair and had to rush around looking for one. Apart from that initial problem my mother informed me everything was fine however on the day of her return Aegean decided to go on strike thankfully they messaged although it was 10 'o' clock at night. I tried desperately to get through eventually they put her on the following day again with confirmation of the wheelchair. London section was fine she tells me and the staff were quite attentive but on landing at Rhodes I waited outside and to my disgust saw my poor mother dragging a 20kg suitcase behind her carrying a coat and her handbag! Not one staff member offered to help she even had to ask a member of the public to lift her case from the conveyor belt."
+    # prompt = "SFO-DUB, LHR-DUB-SFO. Ground staff excellent. On time departure. Flight staff were just going through the motions and seemed as though they couldn't care less about the passengers. Seating was tight, but bearable. Inflight entertainment was pretty good. Meals were not so good and beverage service was below standard. Had issues with passenger behind us that allowed their child to continuously kick the back of our seat. We asked the mother once of the problem yet the child continued. Asked again to please have your child stop the kicking. Third time was enough and flight crew intervened and helped settle the problem. A cookie for the kicking child and a glass of wine for us. Very odd situation but handled OK by crew. Overall the flight seemed short handed, stressed and just did not want to do their job. "
+    prompt = "Bogota to Las Vegas via Fort Lauderdale. Terrible experience very dirty flight and extremely disorganized passenger service and operations. This airline having know the fact that it takes time to go through border control and homeland security gave us less than 1 hour at Fort Lauderdale airport to go through the security and immigration check during peak hours with over 300 odd passengers in a queue. This was at 18.45 hrs I was supposed to be on my next flight unfortunately with Spirit at 20.00 so we had roughly 35 mins. As a result I missed my flight."
+    # prompt = prompt[:100]
+
     '''get answer's hidden state'''
     target_input_ids, target_attention_mask, ori_input_embed, next_hidden_states = get_hidden_state(tokenizer, 
               model, prompt=prompt)
@@ -111,16 +114,16 @@ def main():
     # best hyperparameter combination: lr1000, epoch500
     # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
 
-    for lr in [0.1 * len(target_input_ids[0])]: #[100, 500, 1000, 5000]: #[1000, 5000, 10000]:
-        for total_epoch in [500]: #[500, 1000]:
+    for lr in [4]: #[0.1 * len(target_input_ids[0])]: #[100, 500, 1000, 5000]: #[1000, 5000, 10000]:
+        for total_epoch in [1000]: #[500, 1000]:
             '''try to init input embed'''
             size = (len(target_input_ids[0]) - 1, 4096)
             # means = torch.zeros(size)
             # new_input_embed = torch.normal(mean=means, std=0.1)
             # new_input_embed = new_input_embed.type(torch.float16).to(devices[0])
             
-            # new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
-            new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)
+            new_input_embed_np = np.random.uniform(low=-1., high=1., size=size)
+            # new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)
             new_input_embed = torch.FloatTensor(new_input_embed_np)
             new_input_embed = new_input_embed.unsqueeze(dim=0).type(torch.float16).to(devices[0])
             new_input_embed.requires_grad_(True)
@@ -163,7 +166,7 @@ def main():
 
                 '''detect nan'''
                 nan_exist = torch.any(torch.isnan(cos_sim))
-                print("cos sim nan", nan_exist)
+                print("cos sim detect nan", nan_exist)
                 if nan_exist:
                     continue
 
@@ -236,17 +239,57 @@ def main():
                 ret_list.append(torch.argmax(dist_ret.data))
             
             
-            print("ret: ", ret_list)
+            
+
+            recover_length = len(target_input_ids[0])
+            print("ret: ", ret_list, len(ret_list))
             acc_cnt = 0
-            for j in range(len(target_input_ids[0])):
+            acc_10_cnt = 0
+            acc_20_cnt = 0
+            acc_30_cnt = 0
+            acc_40_cnt = 0
+            acc_50_cnt = 0
+            acc_60_cnt = 0
+            acc_70_cnt = 0
+            acc_80_cnt = 0
+            acc_90_cnt = 0
+            for j in range(recover_length):
                 if target_input_ids[0][j] == ret_list[j]:
                     acc_cnt += 1
+                    if j <= recover_length * 0.1:
+                        acc_10_cnt += 1
+                    if j <= recover_length * 0.2:
+                        acc_20_cnt += 1
+                    if j <= recover_length * 0.3:
+                        acc_30_cnt += 1
+                    if j <= recover_length * 0.4:
+                        acc_40_cnt += 1
+                    if j <= recover_length * 0.5:
+                        acc_50_cnt += 1
+                    if j <= recover_length * 0.6:
+                        acc_60_cnt += 1
+                    if j <= recover_length * 0.7:
+                        acc_70_cnt += 1
+                    if j <= recover_length * 0.8:
+                        acc_80_cnt += 1
+                    if j <= recover_length * 0.9:
+                        acc_90_cnt += 1
             acc = acc_cnt / len(target_input_ids[0])
             print("acc: ", acc)
             ret_tokens = tokenizer.decode(torch.tensor(ret_list))
             print("final result tokens:", ret_tokens)
             txt_file.write("cosine decode: lr{}, epoch{}, acc{}, final loss{}, cos sim{}, result token: \n{} ".format(lr, total_epoch, acc, loss, cos_sim.mean(), ret_tokens))
-
+            txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
+                acc_10_cnt / (0.1 * recover_length),
+                acc_20_cnt / (0.2 * recover_length),
+                acc_30_cnt / (0.3 * recover_length),
+                acc_40_cnt / (0.4 * recover_length),
+                acc_50_cnt / (0.5 * recover_length),
+                acc_60_cnt / (0.6 * recover_length),
+                acc_70_cnt / (0.7 * recover_length),
+                acc_80_cnt / (0.8 * recover_length),
+                acc_90_cnt / (0.9 * recover_length)
+                ))
 
 
             '''calculate discrete loss'''
@@ -261,24 +304,41 @@ def main():
                 txt_file.write("\ndiscrete recover loss {}\n\n\n".format(recovered_loss))
                 rocover_cos_sim = F.cosine_similarity(recovered_state.hidden_states, next_hidden_states, dim=2)
                 print("rocover_cos_sim:", rocover_cos_sim.mean(), rocover_cos_sim.shape)
-                txt_file.write("\ndiscrete recover cosine sim {}\n\n\n".format(rocover_cos_sim.mean()))
+                txt_file.write("\ndiscrete recover cosine sim {}\n\n\n".format(rocover_cos_sim))
+
+                '''show final cos sim with position'''
+                plt.figure()
+                ax = plt.axes()
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+
+                plt.xlabel('token position')
+                plt.ylabel('cos sim')
+                cos_sim = rocover_cos_sim.squeeze(0).data.cpu()
+                print("ploting cosine sim: ", cos_sim.shape)
+                positions_ = np.arange(len(cos_sim))
+                plt.plot(positions_, cos_sim, linewidth=1, linestyle='solid', label='cosine_similarity')
+                plt.legend()
+                plt.title('discrete cosine similarity Curve by token')
+                plt.savefig("discrete-cosine-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+
 
             
-            '''show final cos sim with position'''
-            plt.figure()
-            ax = plt.axes()
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
+            # '''show final cos sim with position'''
+            # plt.figure()
+            # ax = plt.axes()
+            # ax.spines['top'].set_visible(False)
+            # ax.spines['right'].set_visible(False)
 
-            plt.xlabel('position')
-            plt.ylabel('cos sim')
-            cos_sim = cos_sim.squeeze(0).data.cpu()
-            print("ploting cosine sim: ", cos_sim.shape)
-            positions_ = np.arange(len(cos_sim))
-            plt.plot(positions_, cos_sim, linewidth=1, linestyle='solid', label='cosine_similarity')
-            plt.legend()
-            plt.title('cosine similarity Curve')
-            plt.savefig("cosine-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+            # plt.xlabel('position')
+            # plt.ylabel('cos sim')
+            # cos_sim = cos_sim.squeeze(0).data.cpu()
+            # print("ploting cosine sim: ", cos_sim.shape)
+            # positions_ = np.arange(len(cos_sim))
+            # plt.plot(positions_, cos_sim, linewidth=1, linestyle='solid', label='cosine_similarity')
+            # plt.legend()
+            # plt.title('cosine similarity Curve')
+            # plt.savefig("cosine-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
             '''show final loss with position'''
             plt.figure()
