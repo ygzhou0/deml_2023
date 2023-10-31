@@ -11,7 +11,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer)
 
 
 # not only vicuna, I should try other version of llama
-def get_model(devices=['cuda:0'], model_dir="./vicuna-7b-v1.5", 
+def get_model(devices=['cuda:0'], model_dir="vicuna-7b-v1.5", 
               model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     tokenizer = AutoTokenizer.from_pretrained(
         model_dir,
@@ -99,7 +99,12 @@ def main():
     
     '''get model'''
     devices=['cuda:0']
-    model_dir = "./vicuna-7b-v1.5"
+    model_dir = "lmsys/vicuna-7b-v1.5"
+    # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
+    if not os.path.exists(model_dir):
+        pass
+    '''download vicuna 7B model'''
+    # wget.download("https://huggingface.co/lmsys/vicuna-7b-v1.5/resolve/main/pytorch_model-00001-of-00002.bin")
     tokenizer, model = get_model(model_dir=model_dir, devices=devices)
 
     total_layers = model.model.layers
