@@ -203,6 +203,9 @@ def main():
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     ]
+    '''policy: alpha, slide piece'''
+    policies = [(0, "partial" ), (0, "average")]
+
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
@@ -215,32 +218,34 @@ def main():
         total_input_ids, total_attention_mask, _, total_hidden_states = get_hidden_state(tokenizer, 
                     model, prompt=prompt_)
 
-        for prompt_length in [len(total_input_ids[0])]:#[30, 60, len(total_input_ids[0])]:#[5, 10, 20, 30, 40, len(total_input_ids[0])]:
+        for prompt_length in [20, 30, 60, len(total_input_ids[0])]:#[5, 10, 20, 30, 40, len(total_input_ids[0])]:
             
-            position = 0
-            fixed_input_embed = None
-            while position < len(total_input_ids[0]):
-                if position + prompt_length > len(total_input_ids[0]):
-                    prompt_length = len(total_input_ids[0]) - position
-                target_input_ids = total_input_ids[...,position:position+prompt_length]  # piece to be recovered
-                target_attention_mask = total_attention_mask[...,position:position+prompt_length]  # piece to be recovered
-                # next_hidden_states = total_hidden_states[:,position:position+prompt_length,:]  # piece to be recovered
-                # print(target_attention_mask.shape, next_hidden_states.shape, target_input_ids.shape)
+            for policy in policies: #[0, 0.002, 0.01]:
+                alpha, cut_policy = policy
+                print(cut_policy)
+                position = 0
+                fixed_input_embed = None
+                while position < len(total_input_ids[0]):
+                    if position + prompt_length > len(total_input_ids[0]):
+                        prompt_length = len(total_input_ids[0]) - position
+                    target_input_ids = total_input_ids[...,position:position+prompt_length]  # piece to be recovered
+                    target_attention_mask = total_attention_mask[...,position:position+prompt_length]  # piece to be recovered
+                    # next_hidden_states = total_hidden_states[:,position:position+prompt_length,:]  # piece to be recovered
+                    # print(target_attention_mask.shape, next_hidden_states.shape, target_input_ids.shape)
 
-                txt_file.write("recovering piece length: {}\n".format(prompt_length))
-                '''implement length step by step idea'''
+                    txt_file.write("recovering piece length: {}\n".format(prompt_length))
+                    '''implement length step by step idea'''
 
-                recover_length = prompt_length
-                # TODO: do I need to try the M matrix in CCS 2020 paper?
+                    recover_length = prompt_length
+                    # TODO: do I need to try the M matrix in CCS 2020 paper?
 
-                '''define loss func'''
-                loss_func = torch.nn.MSELoss(reduction='mean')
-                # lr = 1 is not feasible
-                # best hyperparameter combination: lr1000, epoch500
-                # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
-                for lr in [4]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-                    for total_epoch in [20000]: # [500, 1000]:
-                        for alpha in [0]: #[0, 0.002, 0.01]:
+                    '''define loss func'''
+                    loss_func = torch.nn.MSELoss(reduction='mean')
+                    # lr = 1 is not feasible
+                    # best hyperparameter combination: lr1000, epoch500
+                    # for cos+cos optimization, best hyperparameter combination is lr 5000, epoch 1000
+                    for lr in [4]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+                        for total_epoch in [10000]: # [500, 1000]:
                             '''try to init input embed'''
                             if fixed_input_embed == None:
                                 size = (len(target_input_ids[0]) - 1, 4096)
@@ -270,8 +275,15 @@ def main():
                             weight_mask = init_weight_mask(0, position + recover_length, method="linear", devices=devices)
                             
                             # weight_mask = init_weight_mask(len_cut_output, recover_length, method="none", devices=devices)
-                            
-                            part_epoch = int(total_epoch * prompt_length / len(total_input_ids[0]))
+                            if cut_policy == "average":
+                                part_epoch = int(total_epoch * prompt_length / len(total_input_ids[0]))
+                            elif cut_policy == "partial":
+                                # for prompt length = 60, total length = 180, total epoch is 12
+                                # part epoch is 2, 4, 6
+                                part_epoch = int(total_epoch * (position + prompt_length) * prompt_length * 2 
+                                                / len(total_input_ids[0]) / (len(total_input_ids[0]) + prompt_length))
+                            else:
+                                raise NotImplementedError
                             '''start timer'''
                             start = time.time()
 
@@ -317,13 +329,13 @@ def main():
                                 # delete last token
                                 sum_cos_sim = ((-cos_sim) * weight_mask).sum()
                                 # sum_cos_sim = (-cos_sim).sum()
-                                print("avg cosine sim:", cos_sim.mean())
+                                print("avg cosine sim:", cos_sim.mean().data)
                                 # print("avg cosine sim:", sum_cos_sim)
                                 sum_cos_sim.backward(inputs=[new_input_embed])
                                 # (-cos_sim).mean().backward()
                                 optim.step()
                                 scheduler.step()
-                                print(weight_mask)
+                                print("length", weight_mask.shape)
                                 # weight_mask = update_weight(weight_mask, recover_length, 0.999, method="exponential")
                                 # weight_mask = update_weight(weight_mask, recover_length, alpha, method="linear")
                                 epochs.append(i)
@@ -407,7 +419,7 @@ def main():
                                     print("acc: ", acc)
                                     ret_tokens = tokenizer.decode(torch.tensor(ret_list))
                                     print("final result tokens:", ret_tokens)
-                                    txt_file.write("lr{}, epoch{}, alpha {}, acc{}, cos sim{}, final loss{}, time {}, result token: \n{}\n".format(lr, i, alpha, acc, cos_sim.mean(), loss, end-start, ret_tokens))
+                                    txt_file.write("lr{}, epoch{}, policy {}, acc{}, cos sim{}, final loss{}, time {}, result token: \n{}\n".format(lr, i, cut_policy, acc, cos_sim.mean(), loss, end-start, ret_tokens))
                                     # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
                                     #     acc_10_cnt / (0.1 * (recover_length - 1)),
                                     #     acc_20_cnt / (0.1 * (recover_length - 1)),
@@ -493,16 +505,16 @@ def main():
                             # plt.legend()
                             # plt.title('cosine similarity Curve')
                             # plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
-                position += prompt_length
-                '''add fixed first tokens'''
-                if fixed_input_embed == None:
-                    new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed), dim=1)
-                    fixed_input_embed = new_input_embed_
-                    # fixed_input_embed.requires_grad_(False)
-                else:
-                    fixed_input_embed = torch.cat((fixed_input_embed, new_input_embed), dim=1)
-                    # fixed_input_embed.requires_grad_(False)
-                '''to be considered: should I clear the gradient of this part?'''
+                    position += prompt_length
+                    '''add fixed first tokens'''
+                    if fixed_input_embed == None:
+                        new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed), dim=1)
+                        fixed_input_embed = new_input_embed_
+                        # fixed_input_embed.requires_grad_(False)
+                    else:
+                        fixed_input_embed = torch.cat((fixed_input_embed, new_input_embed), dim=1)
+                        # fixed_input_embed.requires_grad_(False)
+                    '''to be considered: should I clear the gradient of this part?'''
 
 if __name__ == "__main__":
     main()
