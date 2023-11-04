@@ -218,11 +218,11 @@ def main():
         total_input_ids, total_attention_mask, _, total_hidden_states = get_hidden_state(tokenizer, 
                     model, prompt=prompt_)
 
-        for prompt_length in [20, 30, 60, len(total_input_ids[0])]:#[5, 10, 20, 30, 40, len(total_input_ids[0])]:
+        for policy in policies: #[0, 0.002, 0.01]:
+            alpha, cut_policy = policy
+            print(cut_policy)
+            for prompt_length in [20, 30, 60, len(total_input_ids[0])]:#[5, 10, 20, 30, 40, len(total_input_ids[0])]:
             
-            for policy in policies: #[0, 0.002, 0.01]:
-                alpha, cut_policy = policy
-                print(cut_policy)
                 position = 0
                 fixed_input_embed = None
                 while position < len(total_input_ids[0]):
@@ -290,16 +290,16 @@ def main():
                             for i in range(part_epoch):
                                 '''add known information'''
                                 if fixed_input_embed != None:
-                                    target_attention_mask_inside = total_attention_mask[:,:position+recover_length]
-                                    next_hidden_states_inside = total_hidden_states[:,:position+recover_length]
+                                    target_attention_mask_inside = total_attention_mask[:,:(position+recover_length)]
+                                    next_hidden_states_inside = total_hidden_states[:,:(position+recover_length)]
                                     new_input_embed_ = torch.cat((fixed_input_embed, new_input_embed), dim=1)
                                     # print(fixed_input_embed.shape, new_input_embed_.shape, target_attention_mask_inside.shape, next_hidden_states_inside.shape)
                                     # '''add start token'''
                                     # new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed_), dim=1)
                                 
                                 else:
-                                    target_attention_mask_inside = total_attention_mask[:,position:position+recover_length]
-                                    next_hidden_states_inside = total_hidden_states[:,position:position+recover_length]                           
+                                    target_attention_mask_inside = total_attention_mask[:,position:(position+recover_length)]
+                                    next_hidden_states_inside = total_hidden_states[:,position:(position+recover_length)]                           
                                     # print(target_attention_mask_inside.shape, next_hidden_states_inside.shape)
                                     '''add start token'''
                                     new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed), dim=1)
@@ -342,12 +342,13 @@ def main():
                                 loss_lst.append(loss.data.cpu())
                                 cos_sim_lst.append(sum_cos_sim.data.cpu())
 
-                                if (i+1) % 5000 == 0:
+                                if (i+1) % 5000 == 0 or i == part_epoch - 1:
 
                                     end = time.time()
                                     # print("after optimized:", cut_outputs)
                                     '''show input embedding result'''
                                     new_input_embed_squeeze = new_input_embed_.squeeze(0)
+                                    print(new_input_embed_squeeze.shape)
                                     # print("shapes", embed_layer.weight.shape, new_input_embed.shape)
                                     # print("detect nan", torch.any(torch.isnan(new_input_embed)))
                                     # print("detect nan", torch.any(torch.isnan(embed_layer.weight)))
@@ -360,14 +361,14 @@ def main():
                                     #     ret_list.append(torch.argmin(dist_ret.data.cpu()))
                                     '''show by cosine similarity'''
                                     ret_list = []
-                                    for j, embed in enumerate(new_input_embed_squeeze[:recover_length]):
+                                    for j, embed in enumerate(new_input_embed_squeeze[:(position+recover_length)]):
                                         # convert to float32, avoid dividing 0
                                         dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
                                         '''test the ranking of wrong tokens--most in top 3'''
-                                        print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
-                                        if torch.argmax(dist_ret.data) != target_input_ids.cpu()[0][j]:
-                                            print("correct position and its cosine value:", target_input_ids.cpu()[0][j], dist_ret[target_input_ids.cpu()[0][j]])
-                                            print("\n\ntopk value", torch.topk(dist_ret, 10))
+                                        # print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
+                                        # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
+                                        #     print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
+                                        #     print("\n\ntopk value", torch.topk(dist_ret, 10))
                                         ret_list.append(torch.argmax(dist_ret.data))
                                     
                                     '''show position accuracy'''
@@ -386,7 +387,7 @@ def main():
                                     acc_20t_cnt = 0
                                     acc_30t_cnt = 0
                                     acc_40t_cnt = 0
-                                    for j in range(1, recover_length):
+                                    for j in range(1, (position+recover_length)):
                                         if total_input_ids[0][j] == ret_list[j]:
                                             acc_cnt += 1
                                             if j <= 10:
@@ -397,29 +398,29 @@ def main():
                                                 acc_30t_cnt += 1
                                             if j <= 40:
                                                 acc_40t_cnt += 1
-                                            if j < (recover_length - 1) * 0.1:
-                                                acc_10_cnt += 1
-                                            elif j < (recover_length - 1) * 0.2:
-                                                acc_20_cnt += 1
-                                            elif j < (recover_length - 1) * 0.3:
-                                                acc_30_cnt += 1
-                                            elif j < (recover_length - 1) * 0.4:
-                                                acc_40_cnt += 1
-                                            elif j < (recover_length - 1) * 0.5:
-                                                acc_50_cnt += 1
-                                            elif j < (recover_length - 1) * 0.6:
-                                                acc_60_cnt += 1
-                                            elif j < (recover_length - 1) * 0.7:
-                                                acc_70_cnt += 1
-                                            elif j < (recover_length - 1) * 0.8:
-                                                acc_80_cnt += 1
-                                            elif j < (recover_length - 1) * 0.9:
-                                                acc_90_cnt += 1
-                                    acc = acc_cnt / len(target_input_ids[0] - 1)
+                                            # if j < (recover_length - 1) * 0.1:
+                                            #     acc_10_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.2:
+                                            #     acc_20_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.3:
+                                            #     acc_30_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.4:
+                                            #     acc_40_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.5:
+                                            #     acc_50_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.6:
+                                            #     acc_60_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.7:
+                                            #     acc_70_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.8:
+                                            #     acc_80_cnt += 1
+                                            # elif j < (recover_length - 1) * 0.9:
+                                            #     acc_90_cnt += 1
+                                    acc = acc_cnt / (len(ret_list) - 1)
                                     print("acc: ", acc)
-                                    ret_tokens = tokenizer.decode(torch.tensor(ret_list))
+                                    ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
                                     print("final result tokens:", ret_tokens)
-                                    txt_file.write("lr{}, epoch{}, policy {}, acc{}, cos sim{}, final loss{}, time {}, result token: \n{}\n".format(lr, i, cut_policy, acc, cos_sim.mean(), loss, end-start, ret_tokens))
+                                    txt_file.write("lr{}, epoch{}, policy {}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, cut_policy, acc, cos_sim.mean(), loss, end-start, ret_tokens))
                                     # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
                                     #     acc_10_cnt / (0.1 * (recover_length - 1)),
                                     #     acc_20_cnt / (0.1 * (recover_length - 1)),
@@ -432,10 +433,10 @@ def main():
                                     #     acc_90_cnt / (0.1 * (recover_length - 1))
                                     #     ))
                                     txt_file.write("10 {}, 20 {}, 30 {}, 40 {}\n\n".format(
-                                        acc_10t_cnt / np.min((10, recover_length - 1)),
-                                        acc_20t_cnt / np.min((20, recover_length - 1)),
-                                        acc_30t_cnt / np.min((30, recover_length - 1)),
-                                        acc_40t_cnt / np.min((40, recover_length - 1))
+                                        acc_10t_cnt / np.min((10, len(ret_list) - 1)),
+                                        acc_20t_cnt / np.min((20, len(ret_list) - 1)),
+                                        acc_30t_cnt / np.min((30, len(ret_list) - 1)),
+                                        acc_40t_cnt / np.min((40, len(ret_list) - 1))
                                         ))
                             '''save pickle file'''
                             # prompt = tokenizer.decode(target_input_ids[0][1:])
