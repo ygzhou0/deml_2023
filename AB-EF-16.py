@@ -31,14 +31,14 @@ def get_model(devices=['cuda:0'], model_dir="vicuna-7b-v1.5",
     return tokenizer, model
 
 
-def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_attention_mask=None):
+def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_attention_mask=None, use_rms_norm=True):
     assert(prompt != None or input_embed != None)
     if prompt != None:
         with torch.no_grad():
             target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
             target_input_ids = target_token['input_ids'].to(model.device)
             target_attention_mask = target_token['attention_mask'].to(model.device)
-            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
+            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask, "use_rms_norm": use_rms_norm}
             next_ = model(**inputs)
             embed_layer = model.model.get_input_embeddings()
             ori_input_embed = embed_layer(target_input_ids)
@@ -49,7 +49,7 @@ def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_att
 
     elif input_embed != None:
         with torch.no_grad():
-            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask}
+            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask, "use_rms_norm": use_rms_norm}
             next_ = model(**new_inputs)
             ori_input_embed = input_embed
             print("phi(x*)", next_.hidden_states, next_.hidden_states.shape)
@@ -82,6 +82,22 @@ def update_weight(weight: torch.Tensor, point, exponential, method="exponential"
     return weight
 
 
+def get_relaxed_vector(size: tuple, method: str, device: str):
+    if method == "gaussian":
+        means = torch.zeros(size)
+        z = torch.normal(mean=means, std=0.1)
+    elif method == "uniform":
+        z_np = np.random.uniform(low=-1.0, high=1.0, size=size)
+        z = torch.FloatTensor(z_np)
+    elif method == "zero":
+        z = torch.zeros(size)
+    else:
+        raise ValueError("no such initialization method!")
+    z = z.type(torch.float16).to(device)
+    z.requires_grad_(True)
+    return z
+
+
 
 def init_weight_mask(len_cut_output, prompt_length, method="exponential", devices=['cuda:0']):
     if method == "exponential":
@@ -101,6 +117,84 @@ def init_weight_mask(len_cut_output, prompt_length, method="exponential", device
         raise NotImplementedError
     return weight_mask
 
+
+def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, invert_method='cosine'):
+    new_input_embed_squeeze = hidden_state.squeeze(0)
+    if invert_method == 'L2':
+        '''show by L2 distance'''
+        ret_list = []
+        for embed in new_input_embed_squeeze:
+            # print("shape", embed.shape, embed_layer.weight.shape)
+            dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
+            # print("ret: ", torch.argmin(dist_ret.data.cpu()))
+            # print("best position and its L2 loss value:", torch.argmin(dist_ret.data), torch.min(dist_ret.data))
+            ret_list.append(torch.argmin(dist_ret.data.cpu()))
+    elif invert_method == 'cosine':
+        '''show by cosine similarity'''
+        ret_list = []
+        for j, embed in enumerate(new_input_embed_squeeze):
+            # convert to float32, avoid dividing 0
+            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
+            '''test the ranking of wrong tokens--most in top 3'''
+            # print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
+            # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
+            #     print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
+            #     print("\n\ntopk value", torch.topk(dist_ret, 10))
+            ret_list.append(torch.argmax(dist_ret.data))
+    else:
+        raise NotImplementedError
+    '''show position accuracy'''
+    print("ret: ", ret_list, len(ret_list))
+    acc_cnt = 0
+    acc_10_cnt = 0
+    acc_20_cnt = 0
+    acc_30_cnt = 0
+    acc_40_cnt = 0
+    acc_50_cnt = 0
+    acc_60_cnt = 0
+    acc_70_cnt = 0
+    acc_80_cnt = 0
+    acc_90_cnt = 0
+    acc_10t_cnt = 0
+    acc_20t_cnt = 0
+    acc_30t_cnt = 0
+    acc_40t_cnt = 0
+    prompt_length = len(total_input_ids[0])
+    for j in range(prompt_length):
+        if total_input_ids[0][j] == ret_list[j]:
+            acc_cnt += 1
+            if j <= 10:
+                acc_10t_cnt += 1
+            if j <= 20:
+                acc_20t_cnt += 1
+            if j <= 30:
+                acc_30t_cnt += 1
+            if j <= 40:
+                acc_40t_cnt += 1
+            # if j < (prompt_length - 1) * 0.1:
+            #     acc_10_cnt += 1
+            # elif j < (prompt_length - 1) * 0.2:
+            #     acc_20_cnt += 1
+            # elif j < (prompt_length - 1) * 0.3:
+            #     acc_30_cnt += 1
+            # elif j < (prompt_length - 1) * 0.4:
+            #     acc_40_cnt += 1
+            # elif j < (prompt_length - 1) * 0.5:
+            #     acc_50_cnt += 1
+            # elif j < (prompt_length - 1) * 0.6:
+            #     acc_60_cnt += 1
+            # elif j < (prompt_length - 1) * 0.7:
+            #     acc_70_cnt += 1
+            # elif j < (prompt_length - 1) * 0.8:
+            #     acc_80_cnt += 1
+            # elif j < (prompt_length - 1) * 0.9:
+            #     acc_90_cnt += 1
+    acc = acc_cnt / (len(ret_list))
+    print("acc: ", acc)
+    ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
+    print("final result tokens:", ret_tokens)
+    
+    return acc, ret_tokens
 
 
 def main():
@@ -130,6 +224,7 @@ def main():
 
     '''the original prompt we try to infer'''
     prompts = [
+    # "yes sir",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
@@ -215,22 +310,51 @@ def main():
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     ]
 
-    prompts = [prompts[0]]
+    prompts = [prompts[3]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
         '''implement 16 by 16 idea!!'''
 
-        '''16-16 step1: 32 embedding to 16 embedding'''
         '''get 32 layer total output and total hidden'''
         model.model.layers = total_layers[:32]
-        total_input_ids, total_attention_mask, _, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
-                    model, prompt=prompt_)
+        total_input_ids, total_attention_mask, ori_input_embed, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
+                    model, prompt=prompt_, use_rms_norm=True)
+        prompt_length = len(total_input_ids[0])
+
+
+        '''z test code: forward pass, torch.mm is correct'''
+        # z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0])-1), 
+        #                    method="gaussian", device=devices[0])
+        # z = torch.zeros((32000, 3))
+        # z[1][0] = 1
+        # z[4874][1] = 1
+        # z[8889][2] = 1
+        # print(z)
+        # z=z.type(torch.float32).to(devices[0])
+        # temperature = 0.05
+        # sftz = F.softmax(z / temperature, dim=0)
+        # new_input_embed = torch.mm(sftz.T, embed_layer.weight.type(torch.float32))
+        # print(new_input_embed)
+        # print(ori_input_embed)
+        # o=1/0
+        '''z test code: forward pass, torch.mm is correct'''
+
+
+
+        '''try to directly invert 32 layer hidden state'''
+        acc, ret_tokens = invert_embedding(all_hidden_states[16], tokenizer, embed_layer, total_input_ids, invert_method='L2')
+        print(acc)
+
+
+        '''show input embedding result'''
+        acc, ret_tokens = invert_embedding(all_hidden_states[32], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+        print(acc)
+
+        '''z test code: forward pass'''
 
         '''cutting layers'''
         txt_file.write("cut to 0-16 layers\n")
         model.model.layers = total_layers[:16]
-
-        prompt_length = len(total_input_ids[0])
 
         loss_func = torch.nn.MSELoss(reduction='mean')
 
@@ -238,18 +362,20 @@ def main():
 
         '''get 16 layer total output and total hidden'''
         # _, _, _, total_hidden_states, _ = get_hidden_state(tokenizer, 
-        #             model, prompt=prompt_)
+        #             model, prompt=prompt_, use_rms_norm=False)
 
-        next_hidden_states = norm_layer(all_hidden_states[16])
+        # next_hidden_states = norm_layer(all_hidden_states[16])
+
+        next_hidden_states = all_hidden_states[16]
         next_hidden_states = next_hidden_states.detach()
         next_hidden_states.requires_grad_(False)
+        print("ground truth: ", next_hidden_states)
         # print(total_hidden_states, next_hidden_states)
         # o=1/0
         
         txt_file.write("recovering piece length: {}\n".format(prompt_length))
-        new_input_embed_0 = None
 
-        lr = 3  #[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+        lr = 0.1 #[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
         total_epoch = 3000  # [500, 1000]:
         '''try to init input embed'''
         size = (len(total_input_ids[0]), 4096)
@@ -258,16 +384,31 @@ def main():
         # new_input_embed = torch.normal(mean=means, std=0.1)
         # new_input_embed = new_input_embed.type(torch.float16).to(devices[0])
         
-        new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)
-        # use gaussian distribution may be better
-        # quantify its diffirence. max min mean variance
+        # new_input_embed_np = np.random.uniform(low=-0.01, high=0.01, size=size)
+        # new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)
+        new_input_embed_np = np.random.uniform(low=-1, high=1, size=size)
         new_input_embed_0 = torch.FloatTensor(new_input_embed_np)
         new_input_embed_0 = new_input_embed_0.unsqueeze(dim=0).type(torch.float16).to(devices[0])
         new_input_embed_0.requires_grad_(True)
 
+        txt_file.write("original loss: {}\n".format(torch.norm(new_input_embed_0 - all_hidden_states[0], p=2, dim=2)))
+        # txt_file.close()
+        # o=1/0
+        '''try z dim=0'''
+        # z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0])-1), 
+        #                    method="gaussian", device=devices[0])
+        # z = torch.zeros((tokenizer.vocab_size, len(total_input_ids[0])))
+        # # z[1][0] = 1
+        # # z[4874][1] = 1
+        # # z[8889][2] = 1
+        # # print(z)
+        # z=z.type(torch.float32).to(devices[0]).requires_grad_(True)
+        # temperature = 0.05
+
 
         '''optimizer'''
         optim = torch.optim.SGD([new_input_embed_0], lr=lr)
+        # optim = torch.optim.SGD([z], lr=lr)
         # scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=0.995)
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1)
         epochs = []
@@ -283,17 +424,28 @@ def main():
         start = time.time()
 
         for i in range(part_epoch):
+            
+            # sftz = F.softmax(z / temperature, dim=0)
+            # new_input_embed_0 = torch.mm(sftz.T, embed_layer.weight.type(torch.float32)).type(torch.float16).unsqueeze(0)
             # '''add start token'''
             # new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed), dim=1)
             '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
-            new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask}
+            new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask, "use_rms_norm": False}
             phi_relaxed = model(**new_inputs)
 
 
             '''compute loss'''
             # print("hidden states", phi_relaxed.hidden_states, next_hidden_states)
+            
             loss = loss_func(phi_relaxed.hidden_states, next_hidden_states)
             print("{} epoch, {} loss".format(i, loss.data))
+            # print("shapes", phi_relaxed.hidden_states.shape, next_hidden_states.shape)
+            # print("L2 norm loss", torch.norm(phi_relaxed.hidden_states[0][2] - next_hidden_states[0][2], p=2, dim=-1))
+            # print("gt minmax", torch.max(next_hidden_states[0][2]), torch.min(next_hidden_states[0][2]))
+            # print("ret minmax", torch.max(phi_relaxed.hidden_states[0][2]), torch.min(phi_relaxed.hidden_states[0][2]))
+            # print("gt minmax", torch.max(next_hidden_states), torch.min(next_hidden_states))
+            # print("ret minmax", torch.max(phi_relaxed.hidden_states), torch.min(phi_relaxed.hidden_states))
+            # o=1/0
 
 
             '''compute similarity'''
@@ -301,11 +453,12 @@ def main():
 
             '''backward'''
             optim.zero_grad()
-            # loss.backward()
+            '''use l2 loss to optimize'''
+            # loss.backward(inputs=[new_input_embed_0])
+            # loss.backward(inputs=[z])
             # print(weight_mask)
             # use cosine similarity as backward function
 
-            # delete last token
             sum_cos_sim = ((-cos_sim) * weight_mask).sum()
             print("avg cosine sim:", cos_sim.mean().data)
             sum_cos_sim.backward(inputs=[new_input_embed_0])
@@ -326,80 +479,7 @@ def main():
             if (i+1) % 500 == 0 or i == part_epoch - 1:
 
                 end = time.time()
-                # print("after optimized:", cut_outputs)
-                '''show input embedding result'''
-                new_input_embed_squeeze = new_input_embed_0.squeeze(0)
-                print(new_input_embed_squeeze.shape)
-                # print("shapes", embed_layer.weight.shape, new_input_embed.shape)
-                # print("detect nan", torch.any(torch.isnan(new_input_embed)))
-                # print("detect nan", torch.any(torch.isnan(embed_layer.weight)))
-                '''show by L2 distance'''
-                # ret_list = []
-                # for embed in new_input_embed:
-                #     # print("shape", embed.shape, embed_layer.weight.shape)
-                #     dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
-                #     # print("ret: ", torch.argmin(dist_ret.data.cpu()))
-                #     ret_list.append(torch.argmin(dist_ret.data.cpu()))
-                '''show by cosine similarity'''
-                ret_list = []
-                for j, embed in enumerate(new_input_embed_squeeze):
-                    # convert to float32, avoid dividing 0
-                    dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
-                    '''test the ranking of wrong tokens--most in top 3'''
-                    # print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
-                    # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
-                    #     print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
-                    #     print("\n\ntopk value", torch.topk(dist_ret, 10))
-                    ret_list.append(torch.argmax(dist_ret.data))
-                
-                '''show position accuracy'''
-                print("ret: ", ret_list, len(ret_list))
-                acc_cnt = 0
-                acc_10_cnt = 0
-                acc_20_cnt = 0
-                acc_30_cnt = 0
-                acc_40_cnt = 0
-                acc_50_cnt = 0
-                acc_60_cnt = 0
-                acc_70_cnt = 0
-                acc_80_cnt = 0
-                acc_90_cnt = 0
-                acc_10t_cnt = 0
-                acc_20t_cnt = 0
-                acc_30t_cnt = 0
-                acc_40t_cnt = 0
-                for j in range(1, prompt_length):
-                    if total_input_ids[0][j] == ret_list[j]:
-                        acc_cnt += 1
-                        if j <= 10:
-                            acc_10t_cnt += 1
-                        if j <= 20:
-                            acc_20t_cnt += 1
-                        if j <= 30:
-                            acc_30t_cnt += 1
-                        if j <= 40:
-                            acc_40t_cnt += 1
-                        # if j < (prompt_length - 1) * 0.1:
-                        #     acc_10_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.2:
-                        #     acc_20_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.3:
-                        #     acc_30_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.4:
-                        #     acc_40_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.5:
-                        #     acc_50_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.6:
-                        #     acc_60_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.7:
-                        #     acc_70_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.8:
-                        #     acc_80_cnt += 1
-                        # elif j < (prompt_length - 1) * 0.9:
-                        #     acc_90_cnt += 1
-                acc = acc_cnt / (len(ret_list) - 1)
-                print("acc: ", acc)
-                ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
+                acc, ret_tokens = invert_embedding(new_input_embed_0, tokenizer, embed_layer, total_input_ids, invert_method='L2')
                 print("final result tokens:", ret_tokens)
                 txt_file.write("lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), loss, end-start, ret_tokens))
                 # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
@@ -413,12 +493,12 @@ def main():
                 #     acc_80_cnt / (0.1 * (prompt_length - 1)),
                 #     acc_90_cnt / (0.1 * (prompt_length - 1))
                 #     ))
-                txt_file.write("10 {}, 20 {}, 30 {}, 40 {}\n\n".format(
-                    acc_10t_cnt / np.min((10, len(ret_list) - 1)),
-                    acc_20t_cnt / np.min((20, len(ret_list) - 1)),
-                    acc_30t_cnt / np.min((30, len(ret_list) - 1)),
-                    acc_40t_cnt / np.min((40, len(ret_list) - 1))
-                    ))
+                # txt_file.write("10 {}, 20 {}, 30 {}, 40 {}\n\n".format(
+                #     acc_10t_cnt / np.min((10, len(ret_list) - 1)),
+                #     acc_20t_cnt / np.min((20, len(ret_list) - 1)),
+                #     acc_30t_cnt / np.min((30, len(ret_list) - 1)),
+                #     acc_40t_cnt / np.min((40, len(ret_list) - 1))
+                #     ))
         '''save pickle file'''
         pickle_piece = (prompt_, new_input_embed_0)
         with open("result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
@@ -429,123 +509,34 @@ def main():
         print("two embeddings:", all_hidden_states[0], new_input_embed_0)
         txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[0]), str(new_input_embed_0)))
         txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[0])), str(torch.min(all_hidden_states[0]))))
-        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(new_input_embed_0), str(torch.min(new_input_embed_0))))
+        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(new_input_embed_0)), str(torch.min(new_input_embed_0))))
         
-        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0], new_input_embed_0)))
-        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0], new_input_embed_0).mean().data))
-        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0], new_input_embed_0)), torch.min(F.cosine_similarity(all_hidden_states[0], new_input_embed_0))))
-        
+        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0], new_input_embed_0, dim=2)))
+        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0], new_input_embed_0).mean().data, dim=2))
+        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0], new_input_embed_0, dim=2)), torch.min(F.cosine_similarity(all_hidden_states[0], new_input_embed_0, dim=2))))
+        print(torch.norm(all_hidden_states[0] - new_input_embed_0, p=2, dim=2).shape)
+        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0] - new_input_embed_0, p=2, dim=2).detach().cpu()))
         
         
         '''test layer 0 input embedding'''
-        new_input_embed_squeeze = all_hidden_states[0].squeeze(0)
-        print(new_input_embed_squeeze.shape)
-        # print("shapes", embed_layer.weight.shape, new_input_embed.shape)
-        # print("detect nan", torch.any(torch.isnan(new_input_embed)))
-        # print("detect nan", torch.any(torch.isnan(embed_layer.weight)))
-        '''show by L2 distance'''
-        # ret_list = []
-        # for embed in new_input_embed:
-        #     # print("shape", embed.shape, embed_layer.weight.shape)
-        #     dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
-        #     # print("ret: ", torch.argmin(dist_ret.data.cpu()))
-        #     ret_list.append(torch.argmin(dist_ret.data.cpu()))
-        '''show by cosine similarity'''
-        ret_list = []
-        for j, embed in enumerate(new_input_embed_squeeze):
-            # convert to float32, avoid dividing 0
-            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
-            '''test the ranking of wrong tokens--most in top 3'''
-            # print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
-            # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
-            #     print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
-            #     print("\n\ntopk value", torch.topk(dist_ret, 10))
-            ret_list.append(torch.argmax(dist_ret.data))
-        
-        '''show position accuracy'''
-        print("ret: ", ret_list, len(ret_list))
-        acc_cnt = 0
-        acc_10_cnt = 0
-        acc_20_cnt = 0
-        acc_30_cnt = 0
-        acc_40_cnt = 0
-        acc_50_cnt = 0
-        acc_60_cnt = 0
-        acc_70_cnt = 0
-        acc_80_cnt = 0
-        acc_90_cnt = 0
-        acc_10t_cnt = 0
-        acc_20t_cnt = 0
-        acc_30t_cnt = 0
-        acc_40t_cnt = 0
-        for j in range(1, prompt_length):
-            if total_input_ids[0][j] == ret_list[j]:
-                acc_cnt += 1
-                if j <= 10:
-                    acc_10t_cnt += 1
-                if j <= 20:
-                    acc_20t_cnt += 1
-                if j <= 30:
-                    acc_30t_cnt += 1
-                if j <= 40:
-                    acc_40t_cnt += 1
-                # if j < (prompt_length - 1) * 0.1:
-                #     acc_10_cnt += 1
-                # elif j < (prompt_length - 1) * 0.2:
-                #     acc_20_cnt += 1
-                # elif j < (prompt_length - 1) * 0.3:
-                #     acc_30_cnt += 1
-                # elif j < (prompt_length - 1) * 0.4:
-                #     acc_40_cnt += 1
-                # elif j < (prompt_length - 1) * 0.5:
-                #     acc_50_cnt += 1
-                # elif j < (prompt_length - 1) * 0.6:
-                #     acc_60_cnt += 1
-                # elif j < (prompt_length - 1) * 0.7:
-                #     acc_70_cnt += 1
-                # elif j < (prompt_length - 1) * 0.8:
-                #     acc_80_cnt += 1
-                # elif j < (prompt_length - 1) * 0.9:
-                #     acc_90_cnt += 1
-        acc = acc_cnt / (len(ret_list) - 1)
-        print("acc: ", acc)
-        ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
-        print("final result tokens:", ret_tokens)
-        txt_file.write("hidden states 0, lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), loss, end-start, ret_tokens))
-        # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
-        #     acc_10_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_20_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_30_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_40_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_50_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_60_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_70_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_80_cnt / (0.1 * (prompt_length - 1)),
-        #     acc_90_cnt / (0.1 * (prompt_length - 1))
-        #     ))
-        txt_file.write("10 {}, 20 {}, 30 {}, 40 {}\n\n".format(
-            acc_10t_cnt / np.min((10, len(ret_list) - 1)),
-            acc_20t_cnt / np.min((20, len(ret_list) - 1)),
-            acc_30t_cnt / np.min((30, len(ret_list) - 1)),
-            acc_40t_cnt / np.min((40, len(ret_list) - 1))
-        ))
+        # acc, ret_tokens = invert_embedding(all_hidden_states[0], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
 
         
-        '''test two embedding's forward result'''
-        new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask}
-        phi_relaxed = model(**new_inputs)
-        print(phi_relaxed.hidden_states)
-        new_inputs = {'inputs_embeds': all_hidden_states[0], 'attention_mask': total_attention_mask}
-        phi_2_relaxed = model(**new_inputs)
-        print(phi_2_relaxed.hidden_states)
-        cos_sim = F.cosine_similarity(phi_2_relaxed.hidden_states, phi_relaxed.hidden_states)
+        '''test two embedding's forward hidden state (16 layer)'''
+        # new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask, "use_rms_norm": False}
+        # phi_relaxed = model(**new_inputs)
+        # print(phi_relaxed.hidden_states)
+        # new_inputs = {'inputs_embeds': all_hidden_states[0], 'attention_mask': total_attention_mask, "use_rms_norm": False}
+        # phi_2_relaxed = model(**new_inputs)
+        # print(phi_2_relaxed.hidden_states)
+        # cos_sim = F.cosine_similarity(phi_2_relaxed.hidden_states, phi_relaxed.hidden_states, dim=2)
 
-        print(cos_sim)
+        # print(cos_sim, cos_sim.shape)
 
 
-        print("minmax\n", torch.max(cos_sim), torch.min(cos_sim))
-        print(torch.max(phi_relaxed.hidden_states), torch.min(phi_relaxed.hidden_states))
-        print(torch.max(phi_2_relaxed.hidden_states), torch.min(phi_2_relaxed.hidden_states))
+        # print("minmax\n", torch.max(cos_sim), torch.min(cos_sim))
+        # print(torch.max(phi_relaxed.hidden_states), torch.min(phi_relaxed.hidden_states))
+        # print(torch.max(phi_2_relaxed.hidden_states), torch.min(phi_2_relaxed.hidden_states))
 
 
 

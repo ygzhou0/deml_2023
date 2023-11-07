@@ -834,6 +834,7 @@ class LlamaModel(LlamaPreTrainedModel):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
+        use_rms_norm: Optional[bool] = True,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -905,21 +906,16 @@ class LlamaModel(LlamaPreTrainedModel):
                 use_cache = False
 
         # decoder layers
-        all_hidden_states = () if output_hidden_states else None
+        all_hidden_states = ()
+        # all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.layers):
-            # or to modifiy this, if idx > some certain number, cut the forward process?
-            # cut to 8 layers
-            # if idx >= 16:
-            #     # print("cutting to 16 layers")
-            #     continue
-
             # print(idx, hidden_states)
 
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+            # if output_hidden_states:
+            all_hidden_states += (hidden_states,)
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
@@ -956,12 +952,20 @@ class LlamaModel(LlamaPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+        
+        all_hidden_states += (hidden_states,)
 
-        hidden_states = self.norm(hidden_states)
-
+        '''shut down normalization??'''
+        # print(hidden_states)
+        if use_rms_norm:
+            print("norm!")
+            hidden_states = self.norm(hidden_states)
+        else:
+            print("no norm!")
+        # o=1/0
         # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
+        # if output_hidden_states:
+        all_hidden_states += (hidden_states,)
 
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
@@ -1015,6 +1019,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
+        use_rms_norm: Optional[bool] = True,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -1059,13 +1064,14 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
+            use_rms_norm=use_rms_norm,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
         hidden_states = outputs[0]
-        # print("model hidden state", hidden_states)
+        # print("model hidden state", outputs.hidden_states)
         if self.config.pretraining_tp > 1:
             lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
             logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
@@ -1097,6 +1103,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             past_key_values=outputs.past_key_values,
             # hidden_states=outputs.hidden_states,
             hidden_states=hidden_states,
+            all_hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
 
