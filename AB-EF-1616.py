@@ -358,25 +358,32 @@ def main():
         target_input_ids = total_input_ids
         target_attention_mask = total_attention_mask
         next_hidden_states_32 = all_hidden_states[-1]  # 32 layer ground truth hidden state (after rms norm)
+        # print(torch.min(next_hidden_states_32), torch.min(next_hidden_states_32))
+        # o=1/0
+        # next_hidden_states_32 = torch.clamp(next_hidden_states_32, min=-10, max=10)
         next_hidden_states_32 = next_hidden_states_32.detach()
         next_hidden_states_32.requires_grad_(False)
         txt_file.write("recovering piece length: {}\n".format(prompt_length))
 
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
-        for lr in [0.1]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+        for lr in [0.03]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
             for total_epoch in [500]: # [500, 1000]:
                 '''try to init input embed'''
                 # size = (len(target_input_ids[0]), 4096)
                 size = (len(target_input_ids[0]) - 1, 4096)
                 # means = torch.zeros(size)
-                # new_input_embed = torch.normal(mean=means, std=0.1)
-                # new_input_embed = new_input_embed.type(torch.float16).to(devices[0])
-                
-                new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)  # initialize with uniform random
+                # new_input_embed_16 = torch.normal(mean=means, std=0.2)
+                # new_input_embed_16 = new_input_embed_16.unsqueeze(0).type(torch.float16).to(devices[0])
                 # use gaussian distribution may be better
                 # quantify its difference. max min mean variance
+                new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)  # initialize with uniform random
                 new_input_embed_16 = torch.FloatTensor(new_input_embed_np)
+                '''miracle'''
+                # new_input_embed_16 = all_hidden_states[16][0][1]
+                # print("mean", new_input_embed_16.var())
+                # o=1/0
+                # new_input_embed_16 = new_input_embed_16.unsqueeze(0)
                 new_input_embed_16 = new_input_embed_16.unsqueeze(dim=0).type(torch.float16).to(devices[0])
                 new_input_embed_16.requires_grad_(True)
 
@@ -405,24 +412,25 @@ def main():
 
 
                     '''compute loss'''
-                    # print("hidden states", phi_relaxed.hidden_states, next_hidden_states)
-                    loss = loss_func(phi_relaxed.hidden_states, next_hidden_states_32)
+                    # print("hidden states", phi_relaxed.hidden_states, next_hidden_states_32)
+                    # o=1/0
+                    loss = loss_func(phi_relaxed.hidden_states.type(torch.float32), next_hidden_states_32.type(torch.float32))
                     print("{} epoch, {} loss".format(i, loss.data))
 
 
                     '''compute similarity'''
-                    cos_sim = F.cosine_similarity(phi_relaxed.hidden_states, next_hidden_states_32, dim=2)
+                    cos_sim = F.cosine_similarity(phi_relaxed.hidden_states.type(torch.float32), next_hidden_states_32.type(torch.float32), dim=-1)
 
                     '''backward'''
                     optim.zero_grad()
-                    # loss.backward()
                     # print(weight_mask)
                     # use cosine similarity as backward function
 
                     # delete last token
                     sum_cos_sim = ((-cos_sim) * weight_mask).sum()
                     print("avg cosine sim:", cos_sim.mean().data)
-                    sum_cos_sim.backward(inputs=[new_input_embed_16])    # optimize by cosine sim
+                    # sum_cos_sim.backward(inputs=[new_input_embed_16])    # optimize by cosine sim
+                    loss.backward(inputs=[new_input_embed_16])  # optimize by MSEloss
                     
                     if torch.any(torch.isnan(cos_sim)):
                         exit(0)
@@ -442,7 +450,7 @@ def main():
                     if (i+1) % 500 == 0 or i == part_epoch - 1:
 
                         end = time.time()
-                        acc, ret_tokens = invert_embedding(new_input_embed_16, tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        acc, ret_tokens = invert_embedding(torch.cat((START_16, new_input_embed_16), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
                         print("16 layer result tokens:", ret_tokens)
                         txt_file.write("16 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), loss, end-start, ret_tokens))
                         # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
@@ -464,7 +472,7 @@ def main():
                         # ))
                 '''save pickle file'''
                 prompt = tokenizer.decode(total_input_ids[0][1:])
-                pickle_piece = (prompt, new_input_embed_16)
+                pickle_piece = (prompt, torch.cat((START_16, new_input_embed_16), dim=1))
                 with open("result-16layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
                     pickle.dump(pickle_piece, f)
 
@@ -480,12 +488,13 @@ def main():
         next_hidden_states_16.requires_grad_(False)
         print("two embeddings:", all_hidden_states[16], next_hidden_states_16)
         txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[16]), str(next_hidden_states_16)))
-        txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[16])), str(torch.min(all_hidden_states[16]))))
-        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_16)), str(torch.min(next_hidden_states_16))))
-        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[16], next_hidden_states_16, dim=-1)))
-        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[16], next_hidden_states_16, dim=-1).mean().data))
-        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[16], next_hidden_states_16, dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[16], next_hidden_states_16, dim=-1))))
-        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[16] - next_hidden_states_16, p=2, dim=-1).detach().cpu()))
+        txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[16][0][1:])), str(torch.min(all_hidden_states[16][0][1:]))))
+        txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[16] > 0.1).sum()))
+        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_16[0][1:])), str(torch.min(next_hidden_states_16[0][1:]))))
+        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)))
+        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1).mean().data))
+        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1))))
+        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[16].type(torch.float32) - next_hidden_states_16.type(torch.float32), p=2, dim=-1).detach().cpu()))
         
         o=1/0
         
@@ -566,7 +575,7 @@ def main():
                     if (i+1) % 500 == 0 or i == part_epoch - 1:
 
                         end = time.time()
-                        acc, ret_tokens = invert_embedding(new_input_embed_0, tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        acc, ret_tokens = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
                         print("final result tokens:", ret_tokens)
                         txt_file.write("lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), loss, end-start, ret_tokens))
                         # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
@@ -588,7 +597,7 @@ def main():
                         #     ))
                 '''save pickle file'''
                 prompt = tokenizer.decode(total_input_ids[0][1:])
-                pickle_piece = (prompt, new_input_embed_0)
+                pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
                 with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
                     pickle.dump(pickle_piece, f)
 
