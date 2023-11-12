@@ -82,36 +82,20 @@ def update_weight(weight: torch.Tensor, point, exponential, method="exponential"
     return weight
 
 
-def get_relaxed_vector(size: tuple, method: str, device: str):
-    if method == "gaussian":
-        means = torch.zeros(size)
-        z = torch.normal(mean=means, std=0.1)
-    elif method == "uniform":
-        z_np = np.random.uniform(low=-1.0, high=1.0, size=size)
-        z = torch.FloatTensor(z_np)
-    elif method == "zero":
-        z = torch.zeros(size)
-    else:
-        raise ValueError("no such initialization method!")
-    z = z.type(torch.float16).to(device)
-    z.requires_grad_(True)
-    return z
 
-
-
-def init_weight_mask(len_cut_output, prompt_length, method="exponential", devices=['cuda:0']):
+def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:0']):
     if method == "exponential":
-        weight_mask = torch.zeros(len_cut_output + prompt_length).type(torch.float16)
-        weight_mask[:prompt_length] = 1 / prompt_length
+        weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
+        weight_mask[:recover_length] = 1 / recover_length
         # print("weight_mask", weight_mask)
         weight_mask = weight_mask.to(devices[0])
     elif method == "linear":
-        weight_mask = torch.zeros(len_cut_output + prompt_length).type(torch.float16)
-        weight_mask[:prompt_length] = 1.0
+        weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
+        weight_mask[:recover_length] = 1.0
         # print("weight_mask", weight_mask)
         weight_mask = weight_mask.to(devices[0])
     elif method == "none":
-        weight_mask = torch.ones(len_cut_output + prompt_length).type(torch.float16) / (len_cut_output + prompt_length)
+        weight_mask = torch.ones(len_cut_output + recover_length).type(torch.float16) / (len_cut_output + recover_length)
         weight_mask = weight_mask.to(devices[0])
     else: 
         raise NotImplementedError
@@ -199,7 +183,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
 
 def main():
     '''create log file'''
-    txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
+    # txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
     devices=['cuda:0']
@@ -210,21 +194,24 @@ def main():
     total_layers = model.model.layers
     
     '''freeze model parameter'''
-    # print(model.parameters())
     for param in model.parameters():
-        # print(param)
         param.requires_grad = False
 
     '''fix <start> token'''
     embed_layer = model.model.get_input_embeddings()
     norm_layer = model.model.norm
     START_EMBED = embed_layer.weight[1].data
-    START_EMBED = START_EMBED.unsqueeze(0).to(devices[0])
+    START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0).to(devices[0])
+    # print(START_EMBED.shape)
+    _, _, _, _, all_start_hidden_states = get_hidden_state(tokenizer, model, input_embed=START_EMBED, use_rms_norm=True)
+    START_16 = all_start_hidden_states[16]
     START_EMBED.requires_grad_(False)
+    START_16.requires_grad_(False)
+    # print(START_16.shape)
 
     '''the original prompt we try to infer'''
     prompts = [
-    "yes sir",
+    "yes",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
@@ -310,240 +297,56 @@ def main():
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     ]
 
-    prompts = [prompts[0]]
+    prompts = [prompts[1]]
     for prompt_ in prompts:
-        txt_file.write("recovering {}\n".format(prompt_))
         '''implement 16 by 16 idea!!'''
 
-        '''get 32 layer total output and total hidden'''
+        '''get all hidden states in a list'''
         model.model.layers = total_layers[:32]
-        total_input_ids, total_attention_mask, ori_input_embed, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
+        total_input_ids, total_attention_mask, _, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
                     model, prompt=prompt_, use_rms_norm=True)
-        prompt_length = len(total_input_ids[0])
+        print("collected hidden states:", len(all_hidden_states))
 
-        print(all_hidden_states[0])
+        print("state 0 and 1:", all_hidden_states[0], all_hidden_states[1])
+        print("L2 norm", torch.norm((all_hidden_states[0].type(torch.float32)-all_hidden_states[1].type(torch.float32)), p=2, dim=-1))
+        print("cosine", F.cosine_similarity(all_hidden_states[0].type(torch.float32), all_hidden_states[1].type(torch.float32), dim=-1))
 
-        '''z test code: forward pass, torch.mm is correct'''
-        # z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0])-1), 
-        #                    method="gaussian", device=devices[0])
-        z = torch.zeros((32000, 3))
-        z[1][0] = 1
-        z[4874][1] = 1
-        z[8889][2] = 1
-        print(z)
-        z=z.type(torch.float32).to(devices[0])
-        temperature = 0.05
-        sftz = F.softmax(z / temperature, dim=0)
-        new_input_embed = torch.mm(sftz.T, embed_layer.weight.type(torch.float32))
-        print(new_input_embed)
-        print(ori_input_embed)
-        o=1/0
-        '''z test code: forward pass, torch.mm is correct'''
+        print("state 1 and 2:", all_hidden_states[1], all_hidden_states[2])
+        print("L2 norm", torch.norm((all_hidden_states[1].type(torch.float32)-all_hidden_states[2].type(torch.float32)), p=2, dim=-1))
+        print("cosine", F.cosine_similarity(all_hidden_states[1].type(torch.float32), all_hidden_states[2].type(torch.float32), dim=-1))
 
+        print("state 1 and 3:", all_hidden_states[1], all_hidden_states[3])
+        print("L2 norm", torch.norm((all_hidden_states[1].type(torch.float32)-all_hidden_states[3].type(torch.float32)), p=2, dim=-1))
+        print("cosine", F.cosine_similarity(all_hidden_states[1].type(torch.float32), all_hidden_states[3].type(torch.float32), dim=-1))
 
+        print("state 0 and 16:", all_hidden_states[0], all_hidden_states[16])
+        print("L2 norm", torch.norm((all_hidden_states[0].type(torch.float32)-all_hidden_states[16].type(torch.float32)), p=2, dim=-1))
+        print("cosine", F.cosine_similarity(all_hidden_states[0].type(torch.float32), all_hidden_states[16].type(torch.float32), dim=-1))
 
-        '''try to directly invert 32 layer hidden state'''
-        acc, ret_tokens = invert_embedding(all_hidden_states[16], tokenizer, embed_layer, total_input_ids, invert_method='L2')
-        print(acc)
+        print("state 1 and 16:", all_hidden_states[1], all_hidden_states[16])
+        print("L2 norm", torch.norm((all_hidden_states[1].type(torch.float32)-all_hidden_states[16].type(torch.float32)), p=2, dim=-1))
+        print("cosine", F.cosine_similarity(all_hidden_states[1].type(torch.float32), all_hidden_states[16].type(torch.float32), dim=-1))
 
+        acc, ret_tokens = invert_embedding(all_hidden_states[16], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+        print("16 layer result tokens:", ret_tokens)
 
-        '''show input embedding result'''
-        acc, ret_tokens = invert_embedding(all_hidden_states[32], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
-        print(acc)
+        acc, ret_tokens = invert_embedding(all_hidden_states[1], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+        print("1 layer result tokens:", ret_tokens)
 
-        '''z test code: forward pass'''
+        acc, ret_tokens = invert_embedding(all_hidden_states[2], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+        print("2 layer result tokens:", ret_tokens)
+                        
 
-        '''cutting layers'''
-        txt_file.write("cut to 0-16 layers\n")
-        model.model.layers = total_layers[:16]
-
-        loss_func = torch.nn.MSELoss(reduction='mean')
-
-        '''16-16 step2: 16 embedding to 0 embedding'''
-
-        '''get 16 layer total output and total hidden'''
-        # _, _, _, total_hidden_states, _ = get_hidden_state(tokenizer, 
-        #             model, prompt=prompt_, use_rms_norm=False)
-
-        next_hidden_states_original = all_hidden_states[16]
-        next_hidden_states = torch.clamp(next_hidden_states_original, min=-2, max=2)
-        # next_hidden_states = all_hidden_states[16]
-        next_hidden_states = next_hidden_states.detach()
-        next_hidden_states.requires_grad_(False)
-        print("ground truth: ", next_hidden_states)
-        # print(total_hidden_states, next_hidden_states)
-        # o=1/0
+        # print("two embeddings:", all_hidden_states[16], next_hidden_states_16)
+        # txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[16]), str(next_hidden_states_16)))
+        # txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[16][0][1:])), str(torch.min(all_hidden_states[16][0][1:]))))
+        # txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[16] > 0.1).sum()))
+        # txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_16[0][1:])), str(torch.min(next_hidden_states_16[0][1:]))))
+        # txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)))
+        # txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1).mean().data))
+        # txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1))))
+        # txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[16].type(torch.float32) - next_hidden_states_16.type(torch.float32), p=2, dim=-1).detach().cpu()))
         
-        txt_file.write("recovering piece length: {}\n".format(prompt_length))
-
-        lr = 4 #[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-        total_epoch = 3000  # [500, 1000]:
-        '''try to init input embed'''
-        size = (len(total_input_ids[0]), 4096)
-        # size = (len(total_input_ids[0]) - 1, 4096)
-        # means = torch.zeros(size)
-        # new_input_embed = torch.normal(mean=means, std=0.1)
-        # new_input_embed = new_input_embed.type(torch.float16).to(devices[0])
-        
-        # new_input_embed_np = np.random.uniform(low=-0.01, high=0.01, size=size)
-        new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)
-        # new_input_embed_np = np.random.uniform(low=-1, high=1, size=size)
-        new_input_embed_0 = torch.FloatTensor(new_input_embed_np)
-        new_input_embed_0 = new_input_embed_0.unsqueeze(dim=0).type(torch.float16).to(devices[0])
-        new_input_embed_0.requires_grad_(True)
-
-        txt_file.write("original loss: {}\n".format(torch.norm(new_input_embed_0 - all_hidden_states[0], p=2, dim=2)))
-        # txt_file.close()
-        # o=1/0
-        '''try z dim=0'''
-        # z = get_relaxed_vector(size=(tokenizer.vocab_size, len(target_input_ids[0])-1), 
-        #                    method="gaussian", device=devices[0])
-        # z = torch.zeros((tokenizer.vocab_size, len(total_input_ids[0])))
-        # # z[1][0] = 1
-        # # z[4874][1] = 1
-        # # z[8889][2] = 1
-        # # print(z)
-        # z=z.type(torch.float32).to(devices[0]).requires_grad_(True)
-        # temperature = 0.05
-
-
-        '''optimizer'''
-        optim = torch.optim.SGD([new_input_embed_0], lr=lr)
-        # optim = torch.optim.SGD([z], lr=lr)
-        # scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=0.995)
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=1)
-        epochs = []
-        loss_lst = []
-        cos_sim_lst = []
-
-        '''implement weighted average of loss idea'''
-        weight_mask = init_weight_mask(0, prompt_length, method="linear", devices=devices)
-        
-        # weight_mask = init_weight_mask(len_cut_output, prompt_length, method="none", devices=devices)
-        part_epoch = total_epoch
-        '''start timer'''
-        start = time.time()
-
-        for i in range(part_epoch):
-            
-            # sftz = F.softmax(z / temperature, dim=0)
-            # new_input_embed_0 = torch.mm(sftz.T, embed_layer.weight.type(torch.float32)).type(torch.float16).unsqueeze(0)
-            # '''add start token'''
-            # new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed), dim=1)
-            '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
-            new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask, "use_rms_norm": False}
-            # new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask, "use_rms_norm": True}
-            phi_relaxed = model(**new_inputs)
-
-
-            '''compute loss'''
-            # print("hidden states", phi_relaxed.hidden_states, next_hidden_states)
-            
-            loss = loss_func(phi_relaxed.hidden_states, next_hidden_states)
-            loss_ = torch.norm(phi_relaxed.hidden_states-next_hidden_states, p=2, dim=-1).sum()
-            print("{} epoch, {} loss".format(i, loss_.data))
-            # print(loss_)
-            # print("shapes", phi_relaxed.hidden_states.shape, next_hidden_states.shape)
-            # print("L2 norm loss", torch.norm(phi_relaxed.hidden_states[0][2] - next_hidden_states[0][2], p=2, dim=-1))
-            # print("gt minmax", torch.max(next_hidden_states[0][2]), torch.min(next_hidden_states[0][2]))
-            # print("ret minmax", torch.max(phi_relaxed.hidden_states[0][2]), torch.min(phi_relaxed.hidden_states[0][2]))
-            # print("gt minmax", torch.max(next_hidden_states), torch.min(next_hidden_states))
-            # print("ret minmax", torch.max(phi_relaxed.hidden_states), torch.min(phi_relaxed.hidden_states))
-            # o=1/0
-
-
-            '''compute similarity'''
-            cos_sim = F.cosine_similarity(phi_relaxed.hidden_states, next_hidden_states, dim=2)
-
-            '''backward'''
-            optim.zero_grad()
-            '''use l2 loss to optimize'''
-            # loss.backward(inputs=[new_input_embed_0])
-            # loss.backward(inputs=[z])
-            # print(weight_mask)
-            # use cosine similarity as backward function
-
-            sum_cos_sim = ((-cos_sim) * weight_mask).sum()
-            print("avg cosine sim:", cos_sim.mean().data)
-            sum_cos_sim.backward(inputs=[new_input_embed_0])
-            # loss_.backward(inputs=[new_input_embed_0])
-            # (-cos_sim).mean().backward()
-            optim.step()
-            scheduler.step()
-            print("length", weight_mask.shape)
-            # weight_mask = update_weight(weight_mask, prompt_length, 0.999, method="exponential")
-            # weight_mask = update_weight(weight_mask, prompt_length, alpha, method="linear")
-            epochs.append(i)
-            loss_lst.append(loss.data.cpu())
-            cos_sim_lst.append(sum_cos_sim.data.cpu())
-
-
-
-
-
-            if (i+1) % 500 == 0 or i == part_epoch - 1:
-
-                end = time.time()
-                acc, ret_tokens = invert_embedding(new_input_embed_0, tokenizer, embed_layer, total_input_ids, invert_method='cosine')
-                print("final result tokens:", ret_tokens)
-                txt_file.write("lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), loss, end-start, ret_tokens))
-                # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
-                #     acc_10_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_20_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_30_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_40_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_50_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_60_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_70_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_80_cnt / (0.1 * (prompt_length - 1)),
-                #     acc_90_cnt / (0.1 * (prompt_length - 1))
-                #     ))
-                # txt_file.write("10 {}, 20 {}, 30 {}, 40 {}\n\n".format(
-                #     acc_10t_cnt / np.min((10, len(ret_list) - 1)),
-                #     acc_20t_cnt / np.min((20, len(ret_list) - 1)),
-                #     acc_30t_cnt / np.min((30, len(ret_list) - 1)),
-                #     acc_40t_cnt / np.min((40, len(ret_list) - 1))
-                #     ))
-        '''save pickle file'''
-        pickle_piece = (prompt_, new_input_embed_0)
-        with open("result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
-            pickle.dump(pickle_piece, f)
-        gt_pickle_piece = (prompt_, all_hidden_states[0])
-        with open("gt-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
-            pickle.dump(gt_pickle_piece, f)
-        print("two embeddings:", all_hidden_states[0], new_input_embed_0)
-        txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[0]), str(new_input_embed_0)))
-        txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[0])), str(torch.min(all_hidden_states[0]))))
-        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(new_input_embed_0)), str(torch.min(new_input_embed_0))))
-        
-        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0], new_input_embed_0, dim=2)))
-        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0], new_input_embed_0).mean().data, dim=2))
-        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0], new_input_embed_0, dim=2)), torch.min(F.cosine_similarity(all_hidden_states[0], new_input_embed_0, dim=2))))
-        print(torch.norm(all_hidden_states[0] - new_input_embed_0, p=2, dim=2).shape)
-        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0] - new_input_embed_0, p=2, dim=2).detach().cpu()))
-        
-        
-        '''test layer 0 input embedding'''
-        # acc, ret_tokens = invert_embedding(all_hidden_states[0], tokenizer, embed_layer, total_input_ids, invert_method='cosine')
-
-        
-        '''test two embedding's forward hidden state (16 layer)'''
-        # new_inputs = {'inputs_embeds': new_input_embed_0, 'attention_mask': total_attention_mask, "use_rms_norm": False}
-        # phi_relaxed = model(**new_inputs)
-        # print(phi_relaxed.hidden_states)
-        # new_inputs = {'inputs_embeds': all_hidden_states[0], 'attention_mask': total_attention_mask, "use_rms_norm": False}
-        # phi_2_relaxed = model(**new_inputs)
-        # print(phi_2_relaxed.hidden_states)
-        # cos_sim = F.cosine_similarity(phi_2_relaxed.hidden_states, phi_relaxed.hidden_states, dim=2)
-
-        # print(cos_sim, cos_sim.shape)
-
-
-        # print("minmax\n", torch.max(cos_sim), torch.min(cos_sim))
-        # print(torch.max(phi_relaxed.hidden_states), torch.min(phi_relaxed.hidden_states))
-        # print(torch.max(phi_2_relaxed.hidden_states), torch.min(phi_2_relaxed.hidden_states))
-
-
 
 if __name__ == "__main__":
     main()
