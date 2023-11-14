@@ -186,7 +186,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
-    devices=['cuda:0']
+    devices=['cuda:3']
     model_dir = "lmsys/vicuna-7b-v1.5"
     # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
     tokenizer, model = get_model(model_dir=model_dir, devices=devices)
@@ -302,7 +302,7 @@ def main():
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     ]
 
-    prompts = [prompts[13]]
+    prompts = [prompts[18]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
         '''implement 16 by 16 idea!!'''
@@ -312,14 +312,14 @@ def main():
         total_input_ids, total_attention_mask, _, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
                     model, prompt=prompt_, use_rms_norm=True)
         print("collected hidden states:", len(all_hidden_states))
-        txt_file.write("gt 32 embeddings range: {}\n".format((all_hidden_states[30] > 0.1).sum()))
-        txt_file.write("gt 30 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[30][0][1:])), str(torch.min(all_hidden_states[30][0][1:]))))
-        txt_file.write("gt 30 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[30])), str(torch.min(all_hidden_states[30]))))
-        txt_file.write("gt 31 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[31][0][1:])), str(torch.min(all_hidden_states[31][0][1:]))))
-        txt_file.write("gt 31 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[31])), str(torch.min(all_hidden_states[31]))))
-        txt_file.write("gt 32 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[32][0][1:])), str(torch.min(all_hidden_states[32][0][1:]))))
-        txt_file.write("gt 32 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[32])), str(torch.min(all_hidden_states[32]))))
-        o=1/0
+        # txt_file.write("gt 32 embeddings range: {}\n".format((all_hidden_states[30] > 0.1).sum()))
+        # txt_file.write("gt 30 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[30][0][1:])), str(torch.min(all_hidden_states[30][0][1:]))))
+        # txt_file.write("gt 30 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[30])), str(torch.min(all_hidden_states[30]))))
+        # txt_file.write("gt 31 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[31][0][1:])), str(torch.min(all_hidden_states[31][0][1:]))))
+        # txt_file.write("gt 31 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[31])), str(torch.min(all_hidden_states[31]))))
+        # txt_file.write("gt 32 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[32][0][1:])), str(torch.min(all_hidden_states[32][0][1:]))))
+        # txt_file.write("gt 32 embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[32])), str(torch.min(all_hidden_states[32]))))
+        # o=1/0
 
         '''test code!'''
         '''get 32 layer total output and total hidden'''
@@ -389,7 +389,7 @@ def main():
                 # new_input_embed_16 = new_input_embed_16.unsqueeze(0).type(torch.float16).to(devices[0])
                 # use gaussian distribution may be better
                 # quantify its difference. max min mean variance
-                new_input_embed_np = np.random.uniform(low=-0.05, high=0.05, size=size)  # initialize with uniform random
+                new_input_embed_np = np.random.uniform(low=-0.1, high=0.1, size=size)  # initialize with uniform random
                 new_input_embed_16 = torch.FloatTensor(new_input_embed_np)
                 '''miracle'''
                 # new_input_embed_16 = all_hidden_states[16][16][1]
@@ -483,31 +483,45 @@ def main():
                         #     acc_40t_cnt / np.min((40, len(ret_list) - 1))
                         # ))
                 '''save pickle file'''
-                prompt = tokenizer.decode(total_input_ids[0][1:])
-                pickle_piece = (prompt, torch.cat((START_16, new_input_embed_16), dim=1))
-                with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
-                    pickle.dump(pickle_piece, f)
+                # prompt = tokenizer.decode(total_input_ids[0][1:])
+                # pickle_piece = (prompt, torch.cat((START_16, new_input_embed_16), dim=1))
+                # with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
+                #     pickle.dump(pickle_piece, f)
 
 
-        '''16-16 step2: 16 embedding to 0 embedding'''
+                '''16-16 step2: 16 embedding to 0 embedding'''
 
-        '''get 16 layer total output and total hidden'''
-        # '''cutting layers'''
-        # txt_file.write("cut to 0-16 layers\n")
-        # model.model.layers = total_layers[:16]
-        next_hidden_states_16 = torch.cat((START_16, new_input_embed_16), dim=1)
-        next_hidden_states_16 = next_hidden_states_16.detach()
-        next_hidden_states_16.requires_grad_(False)
-        print("two embeddings:", all_hidden_states[16], next_hidden_states_16)
-        txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[16]), str(next_hidden_states_16)))
-        txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[16][0][1:])), str(torch.min(all_hidden_states[16][0][1:]))))
-        txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[16] > 0.1).sum()))
-        txt_file.write("ret embeddings range: {}\n".format((next_hidden_states_16 > 0.1).sum()))
-        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_16[0][1:])), str(torch.min(next_hidden_states_16[0][1:]))))
-        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)))
-        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1).mean().data))
-        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1))))
-        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[16].type(torch.float32) - next_hidden_states_16.type(torch.float32), p=2, dim=-1).detach().cpu()))
+                '''get 16 layer total output and total hidden'''
+                # '''cutting layers'''
+                # txt_file.write("cut to 0-16 layers\n")
+                # model.model.layers = total_layers[:16]
+                next_hidden_states_16 = torch.cat((START_16, new_input_embed_16), dim=1)
+                next_hidden_states_16 = next_hidden_states_16.detach()
+                next_hidden_states_16.requires_grad_(False)
+                print("two embeddings:", all_hidden_states[16], next_hidden_states_16)
+                txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[16]), str(next_hidden_states_16)))
+                txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[16][0][1:])), str(torch.min(all_hidden_states[16][0][1:]))))
+                txt_file.write("gt embeddings range 0.1: {}\n".format((all_hidden_states[16] > 0.1).sum()))
+                txt_file.write("gt embeddings range 0.2: {}\n".format((all_hidden_states[16] > 0.2).sum()))
+                txt_file.write("gt embeddings range 0.4: {}\n".format((all_hidden_states[16] > 0.4).sum()))
+                txt_file.write("gt embeddings range 0.7: {}\n".format((all_hidden_states[16] > 0.7).sum()))
+                txt_file.write("gt embeddings range 1: {}\n".format((all_hidden_states[16] > 1).sum()))
+                txt_file.write("gt embeddings range 10: {}\n".format((all_hidden_states[16] > 10).sum()))
+                txt_file.write("gt embeddings range 100: {}\n".format((all_hidden_states[16] > 100).sum()))
+                txt_file.write("gt embeddings range 1000: {}\n".format((all_hidden_states[16] > 1000).sum()))
+                txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_16[0][1:])), str(torch.min(next_hidden_states_16[0][1:]))))
+                txt_file.write("ret embeddings range 0.1: {}\n".format((next_hidden_states_16 > 0.1).sum()))
+                txt_file.write("ret embeddings range 0.2: {}\n".format((next_hidden_states_16 > 0.2).sum()))
+                txt_file.write("ret embeddings range 0.4: {}\n".format((next_hidden_states_16 > 0.4).sum()))
+                txt_file.write("ret embeddings range 0.7: {}\n".format((next_hidden_states_16 > 0.7).sum()))
+                txt_file.write("ret embeddings range 1: {}\n".format((next_hidden_states_16 > 1).sum()))
+                txt_file.write("ret embeddings range 10: {}\n".format((next_hidden_states_16 > 10).sum()))
+                txt_file.write("ret embeddings range 100: {}\n".format((next_hidden_states_16 > 100).sum()))
+                txt_file.write("ret embeddings range 1000: {}\n".format((next_hidden_states_16 > 1000).sum()))
+                txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)))
+                txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1).mean().data))
+                txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[16].type(torch.float32), next_hidden_states_16.type(torch.float32), dim=-1))))
+                txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[16].type(torch.float32) - next_hidden_states_16.type(torch.float32), p=2, dim=-1).detach().cpu()))
         
 
 if __name__ == "__main__":

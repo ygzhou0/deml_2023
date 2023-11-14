@@ -186,7 +186,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
-    devices=['cuda:0']
+    devices=['cuda:1']
     model_dir = "lmsys/vicuna-7b-v1.5"
     # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
     tokenizer, model = get_model(model_dir=model_dir, devices=devices)
@@ -297,7 +297,7 @@ def main():
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     ]
 
-    prompts = [prompts[0]]
+    # prompts = [prompts[3]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
         '''implement 16 by 16 idea!!'''
@@ -367,8 +367,9 @@ def main():
 
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
-        for lr in [3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-            for total_epoch in [5000]: # [500, 1000]:
+        for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+            total_epoch = 5000
+            for alpha in [0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]: # [500, 1000]:
                 '''try to init input embed'''
                 # size = (len(target_input_ids[0]), 4096)
                 size = (len(target_input_ids[0]) - 1, 4096)
@@ -414,8 +415,8 @@ def main():
                     '''compute loss'''
                     # print("hidden states", phi_relaxed.hidden_states, next_hidden_states_32)
                     # o=1/0
-                    loss = loss_func(phi_relaxed.hidden_states.type(torch.float32), next_hidden_states_32.type(torch.float32))
-                    print("{} epoch, {} loss".format(i, loss.data))
+                    loss_mse = loss_func(phi_relaxed.hidden_states.type(torch.float32), next_hidden_states_32.type(torch.float32))
+                    print("{} epoch, {} loss".format(i, loss_mse.data))
 
 
                     '''compute similarity'''
@@ -429,11 +430,17 @@ def main():
                     # delete last token
                     sum_cos_sim = ((-cos_sim) * weight_mask).sum()
                     print("avg cosine sim:", cos_sim.mean().data)
-                    sum_cos_sim.backward(inputs=[new_input_embed_0])    # optimize by cosine sim
-                    # loss.backward(inputs=[new_input_embed_0])  # optimize by MSEloss
+                    print(sum_cos_sim)
+                    relu_loss = F.relu(torch.abs(new_input_embed_) - 0.1).sum()
+                    # relu_loss = loss_func(torch.abs(new_input_embed_) , 0.1)
+                    loss = sum_cos_sim + alpha * relu_loss  # limit the range of input embedding
+                    print(relu_loss)
+                    # sum_cos_sim.backward(inputs=[new_input_embed_0])    # optimize by cosine sim
+                    loss.backward(inputs=[new_input_embed_0])  # optimize by MSEloss
                     
                     if torch.any(torch.isnan(cos_sim)):
-                        exit(0)
+                        # exit(0)
+                        break
                     # (-cos_sim).mean().backward()
                     optim.step()
                     scheduler.step()
@@ -441,7 +448,7 @@ def main():
                     # weight_mask = update_weight(weight_mask, recover_length, 0.999, method="exponential")
                     # weight_mask = update_weight(weight_mask, recover_length, alpha, method="linear")
                     epochs.append(i)
-                    loss_lst.append(loss.data.cpu())
+                    loss_lst.append(relu_loss.data.cpu())
                     cos_sim_lst.append(sum_cos_sim.data.cpu())
 
                     if (i+1) % 20 == 0 or i == part_epoch - 1:
@@ -452,7 +459,7 @@ def main():
                         end = time.time()
                         acc, ret_tokens = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
                         print("16 layer result tokens:", ret_tokens)
-                        txt_file.write("0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), loss, end-start, ret_tokens))
+                        txt_file.write("0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, alpha {}, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), relu_loss, end-start, alpha, ret_tokens))
                         # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
                         #     acc_10_cnt / (0.1 * (recover_length - 1)),
                         #     acc_20_cnt / (0.1 * (recover_length - 1)),
@@ -475,26 +482,52 @@ def main():
                 pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
                 with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
                     pickle.dump(pickle_piece, f)
+                '''show loss curve'''
+                plt.figure()
+                ax = plt.axes()
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+
+                plt.xlabel('epoch')
+                plt.ylabel('loss')
+                plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='later loss')
+                plt.legend()
+                plt.title('later Loss Curve')
+                plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
 
-        '''16-16 step2: 16 embedding to 0 embedding'''
+                plt.figure()
+                ax = plt.axes()
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
 
-        '''get 16 layer total output and total hidden'''
-        # '''cutting layers'''
-        # txt_file.write("cut to 0-16 layers\n")
-        # model.model.layers = total_layers[:16]
-        next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
-        next_hidden_states_0 = next_hidden_states_0.detach()
-        next_hidden_states_0.requires_grad_(False)
-        print("two embeddings:", all_hidden_states[0], next_hidden_states_0)
-        txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[0]), str(next_hidden_states_0)))
-        txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[0][0][1:])), str(torch.min(all_hidden_states[0][0][1:]))))
-        txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[0] > 0.1).sum()))
-        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_0[0][1:])), str(torch.min(next_hidden_states_0[0][1:]))))
-        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
-        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
-        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
-        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
+                plt.xlabel('epoch')
+                plt.ylabel('cosine sim')
+                plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
+                plt.legend()
+                plt.title('cosine similarity Curve')
+                plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+
+
+
+                '''16-16 step2: 16 embedding to 0 embedding'''
+
+                '''get 16 layer total output and total hidden'''
+                # '''cutting layers'''
+                # txt_file.write("cut to 0-16 layers\n")
+                # model.model.layers = total_layers[:16]
+                next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+                next_hidden_states_0 = next_hidden_states_0.detach()
+                next_hidden_states_0.requires_grad_(False)
+                print("two embeddings:", all_hidden_states[0], next_hidden_states_0)
+                txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[0]), str(next_hidden_states_0)))
+                txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[0][0][1:])), str(torch.min(all_hidden_states[0][0][1:]))))
+                txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[0] > 0.1).sum()))
+                txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_0[0][1:])), str(torch.min(next_hidden_states_0[0][1:]))))
+                txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
+                txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
+                txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
+                txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
         
 
 if __name__ == "__main__":
