@@ -181,6 +181,24 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
     return acc, ret_tokens
 
 
+def get_sorted_top_k(array, top_k=1, axis=-1, reverse=False):
+
+    if reverse:
+        axis_length = array.shape[axis]
+        partition_index = np.take(np.argpartition(array, kth=-top_k, axis=axis),
+                                  range(axis_length - top_k, axis_length), axis)
+    else:
+        partition_index = np.take(np.argpartition(array, kth=top_k, axis=axis), range(0, top_k), axis)
+    top_scores = np.take_along_axis(array, partition_index, axis)
+    sorted_index = np.argsort(top_scores, axis=axis)
+    if reverse:
+        sorted_index = np.flip(sorted_index, axis=axis)
+    top_sorted_scores = np.take_along_axis(top_scores, sorted_index, axis)
+    top_sorted_indexes = np.take_along_axis(partition_index, sorted_index, axis)
+    return top_sorted_scores, top_sorted_indexes
+
+
+
 def main():
     '''create log file'''
     # txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
@@ -300,6 +318,7 @@ def main():
     # prompts = [prompts[1]]
     state_position = torch.zeros_like(START_EMBED[0][0]).type(torch.float32)
     print(state_position.shape)
+    state_4096 = []
     cnt = 0.0
     for prompt_ in prompts:
         '''implement 16 by 16 idea!!'''
@@ -310,10 +329,10 @@ def main():
                     model, prompt=prompt_, use_rms_norm=True)
         # print("collected states: {}".format(len(all_hidden_states)))
 
-        for state in all_hidden_states[16][0]:
+        for state in all_hidden_states[0][0]:
             # print(state.shape)
             state_position += state.type(torch.float32)
-            # print(state[2533])
+            state_4096.append(state.data.cpu().numpy())
             # print(state_position.dtype)
             cnt += 1
     
@@ -332,6 +351,18 @@ def main():
     print((avg_tensor <- 5).sum())
     print((avg_tensor <- 10).sum())
     print((avg_tensor <- 15).sum())
+    # print(state_4096)
+    state_4096 = np.array(state_4096)
+    print(state_4096.shape)
+    # a = np.array([[1,-2,3],[2,6,1],[6,-6,0],[62,-16,1]])
+    print(get_sorted_top_k(state_4096, top_k=10, axis=0, reverse=True))
+    
+    # print(get_sorted_top_k(state_4096, top_k=10, axis=1, ))
+
+    '''save pickle file'''
+    pickle_piece = (get_sorted_top_k(state_4096, top_k=10, axis=0, reverse=False), get_sorted_top_k(state_4096, top_k=10, axis=0, reverse=True))
+    with open("range.pickle".format(*time.localtime()), "wb") as f:
+        pickle.dump(pickle_piece, f)
 
 
         
