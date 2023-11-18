@@ -186,7 +186,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
-    devices=['cuda:2']
+    devices=['cuda:0']
     model_dir = "lmsys/vicuna-7b-v1.5"
     # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
     tokenizer, model = get_model(model_dir=model_dir, devices=devices)
@@ -372,7 +372,7 @@ def main():
 
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
-        for lr in [3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+        for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
             total_epoch = 5000
             for alpha in [0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                 # if alpha > 0:
@@ -408,6 +408,14 @@ def main():
                 
                 # weight_mask = init_weight_mask(len_cut_output, recover_length, method="none", devices=devices)
                 part_epoch = total_epoch
+                
+                next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+                txt_file.write("before optimization: two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
+                txt_file.write("before optimization: two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
+                txt_file.write("before optimization: two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
+                txt_file.write("before optimization: two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
+        
+
                 '''start timer'''
                 start = time.time()
 
@@ -435,7 +443,7 @@ def main():
                     sum_cos_sim = ((-cos_sim) * weight_mask).sum()
                     print("avg cosine sim: ", cos_sim.mean().data)
                     print(sum_cos_sim)
-                    relu_loss = F.relu(torch.abs(new_input_embed_) - left_range).sum()
+                    relu_loss = F.relu(torch.abs(new_input_embed_) - right_range).sum()
                     # relu_loss = loss_func(torch.abs(new_input_embed_) , 0.1)
                     loss = sum_cos_sim + alpha * relu_loss  # limit the range of input embedding
                     print("relu loss: ", relu_loss)
