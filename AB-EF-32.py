@@ -186,7 +186,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
-    devices=['cuda:0']
+    devices=['cuda:2']
     model_dir = "lmsys/vicuna-7b-v1.5"
     # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
     tokenizer, model = get_model(model_dir=model_dir, devices=devices)
@@ -303,7 +303,7 @@ def main():
         left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(devices[0])
         right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(devices[0])
 
-    prompts = [prompts[3]]
+    prompts = [prompts[13]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
@@ -311,7 +311,7 @@ def main():
         model.model.layers = total_layers[:32]
         total_input_ids, total_attention_mask, _, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
                     model, prompt=prompt_, use_rms_norm=True)
-        print("collected hidden states:", len(all_hidden_states))
+        txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states)))
 
 
         '''test code!'''
@@ -372,9 +372,11 @@ def main():
 
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
-        for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+        for lr in [3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
             total_epoch = 5000
-            for alpha in [0]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
+            for alpha in [0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
+                # if alpha > 0:
+                #     lr *= 0.1
                 '''try to init input embed'''
                 # size = (len(target_input_ids[0]), 4096)
                 size = (len(target_input_ids[0]) - 1, 4096)
@@ -431,12 +433,13 @@ def main():
 
                     # delete last token
                     sum_cos_sim = ((-cos_sim) * weight_mask).sum()
-                    print("avg cosine sim:", cos_sim.mean().data)
+                    print("avg cosine sim: ", cos_sim.mean().data)
                     print(sum_cos_sim)
                     relu_loss = F.relu(torch.abs(new_input_embed_) - left_range).sum()
                     # relu_loss = loss_func(torch.abs(new_input_embed_) , 0.1)
                     loss = sum_cos_sim + alpha * relu_loss  # limit the range of input embedding
-                    print(relu_loss)
+                    print("relu loss: ", relu_loss)
+                    print("total loss: ", loss)
                     # sum_cos_sim.backward(inputs=[new_input_embed_0])    # optimize by cosine sim
                     loss.backward(inputs=[new_input_embed_0])  # optimize by MSEloss
                     
@@ -453,7 +456,7 @@ def main():
                     loss_lst.append(relu_loss.data.cpu())
                     cos_sim_lst.append(sum_cos_sim.data.cpu())
 
-                    if (i+1) % 20 == 0 or i == part_epoch - 1:
+                    if (i+1) % 250 == 0 or i == part_epoch - 1:
                         txt_file.write("cos sim: {}\n".format(cos_sim.mean().data))
 
                     if (i+1) % 500 == 0 or i == part_epoch - 1:
