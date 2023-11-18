@@ -186,7 +186,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
-    devices=['cuda:1']
+    devices=['cuda:0']
     model_dir = "lmsys/vicuna-7b-v1.5"
     # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
     tokenizer, model = get_model(model_dir=model_dir, devices=devices)
@@ -297,10 +297,15 @@ def main():
     "Brisbane-Taipei-Paris Premium Laurel Class. Both flights great however more room on 777 then A330. Seat is not flat in sleep mode which was a bit of a pain however still managed some sleep. Food great on both flights. Cabin crew very friendly and came down aisle on both legs offering drinks and snacks.",
     ]
 
-    # prompts = [prompts[3]]
+    '''load range file'''
+    with open("range.pickle", 'rb') as f:
+        left, right = pickle.load(f)
+        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(devices[0])
+        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(devices[0])
+
+    prompts = [prompts[3]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
-        '''implement 16 by 16 idea!!'''
 
         '''get all hidden states in a list'''
         model.model.layers = total_layers[:32]
@@ -369,7 +374,7 @@ def main():
         loss_func = torch.nn.MSELoss(reduction='mean')
         for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
             total_epoch = 5000
-            for alpha in [0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]: # [500, 1000]:
+            for alpha in [0]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                 '''try to init input embed'''
                 # size = (len(target_input_ids[0]), 4096)
                 size = (len(target_input_ids[0]) - 1, 4096)
@@ -411,10 +416,7 @@ def main():
                     new_inputs = {'inputs_embeds': new_input_embed_, 'attention_mask': target_attention_mask, "use_rms_norm": True}
                     phi_relaxed = model(**new_inputs)
 
-
                     '''compute loss'''
-                    # print("hidden states", phi_relaxed.hidden_states, next_hidden_states_32)
-                    # o=1/0
                     loss_mse = loss_func(phi_relaxed.hidden_states.type(torch.float32), next_hidden_states_32.type(torch.float32))
                     print("{} epoch, {} loss".format(i, loss_mse.data))
 
@@ -431,7 +433,7 @@ def main():
                     sum_cos_sim = ((-cos_sim) * weight_mask).sum()
                     print("avg cosine sim:", cos_sim.mean().data)
                     print(sum_cos_sim)
-                    relu_loss = F.relu(torch.abs(new_input_embed_) - 0.1).sum()
+                    relu_loss = F.relu(torch.abs(new_input_embed_) - left_range).sum()
                     # relu_loss = loss_func(torch.abs(new_input_embed_) , 0.1)
                     loss = sum_cos_sim + alpha * relu_loss  # limit the range of input embedding
                     print(relu_loss)
@@ -479,34 +481,35 @@ def main():
                         # ))
                 '''save pickle file'''
                 prompt = tokenizer.decode(total_input_ids[0][1:])
-                pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
-                with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
-                    pickle.dump(pickle_piece, f)
-                '''show loss curve'''
-                plt.figure()
-                ax = plt.axes()
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
+                # pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
+                # with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
+                #     pickle.dump(pickle_piece, f)
 
-                plt.xlabel('epoch')
-                plt.ylabel('loss')
-                plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='later loss')
-                plt.legend()
-                plt.title('later Loss Curve')
-                plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+                # '''show loss curve'''
+                # plt.figure()
+                # ax = plt.axes()
+                # ax.spines['top'].set_visible(False)
+                # ax.spines['right'].set_visible(False)
+
+                # plt.xlabel('epoch')
+                # plt.ylabel('loss')
+                # plt.plot(epochs, loss_lst, linewidth=1, linestyle='solid', label='later loss')
+                # plt.legend()
+                # plt.title('later Loss Curve')
+                # plt.savefig("loss-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
 
-                plt.figure()
-                ax = plt.axes()
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
+                # plt.figure()
+                # ax = plt.axes()
+                # ax.spines['top'].set_visible(False)
+                # ax.spines['right'].set_visible(False)
 
-                plt.xlabel('epoch')
-                plt.ylabel('cosine sim')
-                plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
-                plt.legend()
-                plt.title('cosine similarity Curve')
-                plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
+                # plt.xlabel('epoch')
+                # plt.ylabel('cosine sim')
+                # plt.plot(epochs, cos_sim_lst, linewidth=1, linestyle='solid', label='cosine sim')
+                # plt.legend()
+                # plt.title('cosine similarity Curve')
+                # plt.savefig("cos-sim-lr-{}-epoch-{}-{}-{}-{}-{}-{}-{}.png".format(lr, total_epoch, *time.localtime()))
 
 
 
