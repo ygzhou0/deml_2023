@@ -37,7 +37,7 @@ torch==2.0.1+cu117
 torchaudio==2.0.2+cu117
 torchvision==0.15.2+cu117
 tqdm==4.66.1
-transformers==4.35.0.dev0
+transformers==4.35.2
 triton==2.0.0
 typing_extensions==4.8.0
 urllib3==2.0.7

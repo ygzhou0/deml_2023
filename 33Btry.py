@@ -235,11 +235,11 @@ def main():
     START_EMBED = accelerator.prepare(START_EMBED.unsqueeze(0).unsqueeze(0))
     # print(START_EMBED.shape)
     _, _, _, all_start_hidden_states = get_hidden_state(tokenizer, model, accelerator, input_embed=START_EMBED) #, use_rms_norm=True)
-    START_16 = all_start_hidden_states[16]
+    # START_16 = all_start_hidden_states[16]
     START_EMBED.requires_grad_(False)
-    START_16.requires_grad_(False)
+    # START_16.requires_grad_(False)
     print(START_EMBED)
-    print(START_16.shape)
+    # print(START_16.shape)
 
     '''the original prompt we try to infer'''
     prompts = [
@@ -330,10 +330,10 @@ def main():
     ]
 
     '''load range file'''
-    with open("range.pickle", 'rb') as f:
+    with open("range_llama30B.pickle", 'rb') as f:
         left, right = pickle.load(f)
-        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(devices[0])
-        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(devices[0])
+        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16)
+        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16)
 
     # prompts = [prompts[13]]
     for prompt_ in prompts:
