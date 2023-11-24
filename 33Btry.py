@@ -54,8 +54,8 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
     if prompt != None:
         with torch.no_grad():
             target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
-            target_input_ids = target_token['input_ids']
-            target_attention_mask = target_token['attention_mask']
+            target_input_ids = target_token['input_ids'].to(model.device)
+            target_attention_mask = target_token['attention_mask'].to(model.device)
             inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
             
             '''get hidden states from all layers'''
@@ -69,7 +69,6 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
                     # print("NORM LAYER")
                     handle = module.register_forward_hook(forward_hook)
                     hook_handles.append(handle)
-            inputs = accelerator.prepare(inputs)
 
             next_ = model(**inputs)
             embed_layer = model.model.get_input_embeddings()
@@ -330,34 +329,37 @@ def main():
     ]
 
     '''load range file'''
-    with open("range_llama30B.pickle", 'rb') as f:
-        left, right = pickle.load(f)
-        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16)
-        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16)
+    # with open("range_llama30B.pickle", 'rb') as f:
+    #     left, right = pickle.load(f)
+    #     left_range = torch.FloatTensor(left[0][-1]).type(torch.float16)
+    #     right_range = torch.FloatTensor(right[0][-1]).type(torch.float16)
+    left_range = torch.ones(START_EMBED.shape[-1]) * 0.1
+    right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
+    left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
-    # prompts = [prompts[13]]
+    prompts = [prompts[13]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
         '''get all hidden states in a list'''
-        model.model.layers = total_layers[:32]
+        model.model.layers = total_layers
         total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
-                    model, prompt=prompt_)
+                    model, accelerator, prompt=prompt_)
         txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states)))
 
-        '''16-16 step1: 32 embedding to input embedding'''
-        model.model.layers = total_layers[:32]
+        '''step1: last embedding to input embedding'''
+        model.model.layers = total_layers
         prompt_length = len(total_input_ids[0])
         recover_length = prompt_length
         target_input_ids = total_input_ids
         target_attention_mask = total_attention_mask
-        next_hidden_states_32 = all_hidden_states[-1]  # 32 layer ground truth hidden state (after rms norm)
-        # print(torch.min(next_hidden_states_32), torch.min(next_hidden_states_32))
-        # print(next_hidden_states_32, START_16)
+        next_hidden_states_last = all_hidden_states[-1]  # last layer ground truth hidden state (after rms norm)
+        # print(torch.min(next_hidden_states_last), torch.min(next_hidden_states_last))
+        # print(next_hidden_states_last, START_16)
         # o=1/0
-        # next_hidden_states_32 = torch.clamp(next_hidden_states_32, min=-10, max=10)
-        next_hidden_states_32 = next_hidden_states_32.detach()
-        next_hidden_states_32.requires_grad_(False)
+        # next_hidden_states_last = torch.clamp(next_hidden_states_last, min=-10, max=10)
+        next_hidden_states_last = next_hidden_states_last.detach()
+        next_hidden_states_last.requires_grad_(False)
         txt_file.write("recovering piece length: {}\n".format(prompt_length))
 
         '''define loss func'''
@@ -368,8 +370,8 @@ def main():
                 # if alpha > 0:
                 #     lr *= 0.1
                 '''try to init input embed'''
-                # size = (len(target_input_ids[0]), 4096)
-                size = (len(target_input_ids[0]) - 1, 4096)
+                # size = (len(target_input_ids[0]), START_EMBED.shape[-1])
+                size = (len(target_input_ids[0]) - 1, START_EMBED.shape[-1])
                 # means = torch.zeros(size)
                 # new_input_embed_16 = torch.normal(mean=means, std=0.2)
                 # new_input_embed_16 = new_input_embed_16.unsqueeze(0).type(torch.float16).to(devices[0])
@@ -382,7 +384,7 @@ def main():
                 # print("mean", new_input_embed_16.var())
                 # o=1/0
                 # new_input_embed_16 = new_input_embed_16.unsqueeze(0)
-                new_input_embed_0 = new_input_embed_0.unsqueeze(dim=0).type(torch.float16).to(devices[0])
+                new_input_embed_0 = new_input_embed_0.unsqueeze(dim=0).type(torch.float16).to(model.device)
                 new_input_embed_0.requires_grad_(True)
 
                 '''optimizer'''
@@ -394,7 +396,7 @@ def main():
                 cos_sim_lst = []
 
                 '''implement weighted average of loss idea'''
-                weight_mask = init_weight_mask(0, recover_length, method="linear", devices=devices)
+                weight_mask = init_weight_mask(0, recover_length, method="linear", devices=[model.device])
                 
                 # weight_mask = init_weight_mask(len_cut_output, recover_length, method="none", devices=devices)
                 part_epoch = total_epoch
@@ -444,12 +446,12 @@ def main():
                     hidden_state_list = []
 
                     '''compute loss'''
-                    loss_mse = loss_func(last_hidden_state.type(torch.float32), next_hidden_states_32.type(torch.float32))
+                    loss_mse = loss_func(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32))
                     print("{} epoch, {} loss".format(i, loss_mse.data))
 
 
                     '''compute similarity'''
-                    cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_32.type(torch.float32), dim=-1)
+                    cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
 
                     '''backward'''
                     optim.zero_grad()
@@ -457,6 +459,7 @@ def main():
                     # use cosine similarity as backward function
 
                     # delete last token
+                    cos_sim = cos_sim.to(model.device)
                     sum_cos_sim = ((-cos_sim) * weight_mask).sum()
                     print("avg cosine sim: ", cos_sim.mean().data)
                     print(sum_cos_sim)
