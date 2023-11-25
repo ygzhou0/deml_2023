@@ -276,6 +276,12 @@ def main():
 
     '''the original prompt we try to infer'''
     prompts = [
+    "London Stansted-Athens-Thessaloniki. Once again although cabin experience with this airline is good check-in process seems to be its weak point. Flight departed Stansted on time but just before landing at Athens I realised that I did not have a boarding pass for the connecting flight. I spoke to cabin crew about it but they seemed unaware of any issues/processes and simply referred me to the connecting flight desk at the airport. When I got there this was shut. There was no one available from the airline either and I ended up speaking to airport security. I was told that I had to come out of the airport security controlled area and check in all over again to get the boarding pass and that this is a standard procedure even though bags get transferred on to next flight automatically. There was a queue from hell at check-in which seems to be the norm for Aegean. I have never been asked to check in twice at airport for connecting flights. This then caused problems with my airport shopping not getting through security and I had to pick up my bag re-pack and hand in again. This involved a long and time- consuming process walking up and down the airport's different floors etc. Ground staff were understanding and did their best to help but there is no two ways about it: this was a very poorly \"organised\" connecting flight. I sent a form to customer service to complain but they just said that the problem was at Stansted and that they have rectified it. I asked how they have rectified it but they just responded by repeating the same. I am not convinced. A hassle-free flight with Aegean seems impossible and the overall experience does not correspond to what you pay. I would not recommend. On the way back with Air Berlin connecting at Dusseldorf did not give any problems and was a pleasure to walk past the Aegean packed check-in area knowing I didn't have to brave it.",
+    "The short flight from Athens to Istanbul was delayed by 1.5 hrs making my fiancé and I miss our connecting flights back to Singapore. We were stranded in Istanbul airport for 12 hours with no offer of food or drink and no concrete solution from Aegean. Eventually at 3am the morning we were given a hotel. We slept for 4 hours. We then rushed back to the airport the next morning finally guaranteed a flight and arrived back just in time for work on Monday 6am. We were suppose to be there the previous morning (Sunday). Aegean made no effort to book us decent seats leaving us to sit apart the entire journey home as a result I didn't sleep at all during the flight. Therefore I had 4 hours sleep in 48 hours and had to go straight in to work. The representative also lied to us to keep us happy until we left and could do nothing about it. We tried to call him but he refused to take our calls. The plane was really nice and comfy seats but the pilot nearly crashed upon landing. I would suspect that the reason the flight was delayed in the first place was that there was no pilot thus a stand-in pilot was used.",
+    "Bangkok to London Heathrow via Moscow. After reading mixed reviews thought this could be a nightmare when in actual fact the service was good. Friendly staff flights on time online check in and seat reservation a breeze at Bangkok you can check in at self service terminal - saves a lot of queuing. Very convenient print boarding card fast bag drop new planes and great prices the food served was not big portion sizes but was tasty standard economy airline food no alcohol served on the BKK to Moscow leg but plenty of soft drinks - water juices etc which came round every hr or so. Moscow airport: I read loads of negative reviews terminal F is old and not great but D & E where most international flights depart from are modern Burger king TGI Fridays etc loads of retail outlets prices same as all airports. I also read its a nightmare to transit between terminals when in fact its not it is a long walk between them but no problem. One security check one passport check. I have to say some staff look very stern but they are actually very friendly. There is no smoking in all terminals. All in all I would fly with them again based on price and service I received.",
+    "I flew MIA-EZE-MIA round trip on Aerolineas Argentinas (AeroA) December 24 2013 returning January 7 2014. I bought the ticket online but their website is not set up to allow you to select your seat. So I called their 800 number in the US. I called for 3 days several times each day before someone answered the phone. This agent's English was so bad it took 20 minutes to select my seats. EZE airport check-in at Buenos Aires is chaos. On AeroA all passengers for the MIA flight stood in a single line to be checked-in for only that flight. The same for other flights. We found this out by asking other passengers what to do as there were no AeroA employees or announcement boards present. There were long long lines of passengers snaking through the terminal. Check-in was so slow we were concerned we would miss our flight even though we arrived 2 hours early. It didn't matter though because our flight was delayed 3 hours on a crystal-clear morning. When we arrived at MIA 3 hours late the AeroA gate agents had gone home and there was no one to help us with rebooking our connections to Chicago. The planes both ways were run-down and old on the inside. On the way down a ceiling panel rattled the entire 9 hours. The entertainment system did not work either direction. The flight attendants only appeared 4 times in 9 hours: to serve drinks after takeoff to serve and collect dinner serve and collect breakfast and hand out immigration and customs forms. My advice: 1) Do not fly Aerolineas Argentinas for any reason even if you have to change your travel plans to avoid them or pay more on another airline. 2) If you are unlucky enough to use them and have to fly out of Buenos Aires EZE airport arrive 3 hours early and prepare for the slowest and most disorganized check-in procedure you have ever experienced. 3) If you do not speak Spanish then you will receive only limited customer service on the phone and their web site is primitive. 4) Prepare yourself for old tatty airplanes with no working entertainment system and largely-invisible flight attendants.",
+    "I took a flight from Netherlands to New Delhi via Moscow airport dated 16th December. I read all the reviews and statistics to check the possibility of any flight cancellation. Most of the reviews were negative but the stats were sound showing there were not significant delays. I was primarily hoping for 2 things 1). On time flight 2). Safe arrival of luggage. The flight from Amsterdam airport to Moscow (2 hours time) didn't had inflight entertainment. The other flight from Moscow to New Delhi (6 hours 20 minutes duration) had good inflight entertainment system. The quality of food was OK was not at its best. There were no delays in the connecting flights. I had to board from Terminal E to Terminal F which was nearby some 700 meters walking distance. However there were some issues with Moscow Airport - i). To my wonder the security staff was missing and the passengers had to wait for odd 20 minutes. They came scanned the handbags and put stamp on 'boarding pass' ii). the mini trolleys which are otherwise freely available on Amsterdam airport were simply unavailable. The passengers carrying hand bags had to face difficulty in rushing between terminals iii). The sign boards in Moscow airport are not mountedpositioned at appropriate locations. The travelers sometimes have to take U turn to go the correct direction.",
+    "Even though Aerolineas Argentinas has received too many complaints from customers recently my flight from Sao Paulo Brazil to Buenos Aires Argentina on March 1 2014 in Premium Economy Class was great and I have no complaints. The flight was on schedule the flight crew were polite and helpful. Aerolineas Argentinas' premium economy class is the same as most US companies' domestic first class. The seats are J seats very comfortable and the food in this class was also a great sandwich yoghurt and a chocolate muffin. Compared to service in the same route provided by Brazilian companies I have flown and comparing also the price Aerolineas Argentinas Premium Economy class is far better in service and mainly in seat comfort!",
     "yes",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
@@ -371,7 +377,7 @@ def main():
     # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
-    prompts = [prompts[13]]
+    prompts = [prompts[0]]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
@@ -405,8 +411,8 @@ def main():
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
         for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-            total_epoch = 5000
-            for alpha in [0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
+            total_epoch = 2000
+            for alpha in [6e-4]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                 # if alpha > 0:
                 #     lr *= 0.1
                 '''try to init input embed'''
@@ -441,11 +447,11 @@ def main():
                 # weight_mask = init_weight_mask(len_cut_output, recover_length, method="none", devices=devices)
                 part_epoch = total_epoch
                 
-                next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
-                txt_file.write("before optimization: two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
-                txt_file.write("before optimization: two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
-                txt_file.write("before optimization: two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
-                txt_file.write("before optimization: two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
+                # next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+                # txt_file.write("before optimization: two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
+                # txt_file.write("before optimization: two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
+                # txt_file.write("before optimization: two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
+                # txt_file.write("before optimization: two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
         
 
                 '''start timer'''
@@ -453,7 +459,7 @@ def main():
 
                 for i in range(part_epoch):
                     with torch.no_grad():
-                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.1, 0.1)
+                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.2, 0.2)
                     new_input_embed_0 = new_input_embed_0.requires_grad_(True)
                     optim = torch.optim.SGD([new_input_embed_0], lr=lr)
                     # '''add start token'''
@@ -479,7 +485,7 @@ def main():
                         if name == "model.layers.60":
                             handle = module.register_forward_hook(forward_hook)
                             hook_handles.append(handle)
-                    print("collect hidden states: {}".format(len(hook_handles)))
+                    # print("collect hidden states: {}".format(len(hook_handles)))
                     phi_relaxed = model(**new_inputs)
                     for handle in hook_handles:
                         handle.remove()
@@ -530,10 +536,10 @@ def main():
                     torch.cuda.empty_cache()
                     
 
-                    if (i+1) % 250 == 0 or i == part_epoch - 1:
+                    if (i+1) % 25 == 0 or i == part_epoch - 1:
                         txt_file.write("cos sim: {}\n".format(cos_sim.mean().data))
 
-                    if (i+1) % 500 == 0 or i == part_epoch - 1:
+                    if (i+1) % 100 == 0 or i == part_epoch - 1:
 
                         end = time.time()
                         acc, ret_tokens = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
