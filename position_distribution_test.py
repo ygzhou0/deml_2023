@@ -7,12 +7,12 @@ import pickle
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
-from transformers import (AutoModelForCausalLM, AutoTokenizer)
+from transformers import (AutoModelForCausalLM, AutoTokenizer, AutoConfig)
+from accelerate import Accelerator, dispatch_model, infer_auto_device_map
 
 
 # not only vicuna, I should try other version of llama
-def get_model(devices=['cuda:0'], model_dir="vicuna-7b-v1.5", 
-              model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
+def get_model(model_dir="vicuna-7b-v1.5", model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     tokenizer = AutoTokenizer.from_pretrained(
         model_dir,
         trust_remote_code=True,
@@ -26,39 +26,115 @@ def get_model(devices=['cuda:0'], model_dir="vicuna-7b-v1.5",
         torch_dtype=torch.float16,
         trust_remote_code=True,
         **model_kwargs
-    ).to(devices[0])
+    )
+    # device_map = infer_auto_device_map(model)
+    # print(device_map)
+    device_map = {}
+    print(torch.cuda.device_count())
+    model_layers = 32
+    if model_dir.endswith("65b"):
+        model_layers = 80
+    elif model_dir.endswith("30b"):
+        model_layers = 60
+    for i in range(model_layers):
+        layer = "model.layers." + str(i)
+        device_map[layer] = int(i / model_layers * 4)
+    device_map["model.embed_tokens"] = 0
+    device_map["model.norm"] = 3
+    device_map["lm_head"] = 3
+    
+    print(device_map)
+    model = dispatch_model(model, device_map=device_map)
     model.gradient_checkpointing = True
     return tokenizer, model
 
 
-def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_attention_mask=None, use_rms_norm=True):
+def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=None, target_attention_mask=None):
     assert(prompt != None or input_embed != None)
+    hidden_state_list = []
+    hook_handles = []
+    def forward_hook(module, input, output):
+        # print(output)
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(output)
+        else:
+            hidden_state_list.append(output)
+    def full_hook(module, input, output):
+        print("full hook", input)
+        if isinstance(input, tuple):
+            # print(input[0])
+            # print(input[0][0])
+            hidden_state_list.append(input[0])
+        else:
+            hidden_state_list.append(input)
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(output)
+        else:
+            hidden_state_list.append(output)
     if prompt != None:
         with torch.no_grad():
             target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
             target_input_ids = target_token['input_ids'].to(model.device)
             target_attention_mask = target_token['attention_mask'].to(model.device)
-            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask, "use_rms_norm": use_rms_norm}
+            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
+            
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                # print(name, module)
+                if name[:13] == "model.layers." and len(name) <= 15:
+                    # print("layer module")
+                    # print(name)
+                    if int(name[13:]) == 0:
+                        print(name)
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    else:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                elif name == "model.norm":
+                    # print("NORM LAYER")
+                    handle = module.register_forward_hook(forward_hook)
+                    hook_handles.append(handle)
+
             next_ = model(**inputs)
             embed_layer = model.model.get_input_embeddings()
             ori_input_embed = embed_layer(target_input_ids)
 
-            # print("phi(x*)", next_.hidden_states, next_.hidden_states.shape)
-            # print(next_.all_hidden_states, len(next_.all_hidden_states))
-            all_hidden_states = next_.all_hidden_states
-
     elif input_embed != None:
         with torch.no_grad():
-            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask, "use_rms_norm": use_rms_norm}
+            input_embed.to(model.device)
+            # target_attention_mask.to("cuda")
+            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask} #, "use_rms_norm": use_rms_norm}
+            
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                # print(name, module)
+                if name[:13] == "model.layers." and len(name) <= 15:
+                    # print("layer module")
+                    # print(name)
+                    if int(name[13:]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    else:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                elif name == "model.norm":
+                    # print("NORM LAYER")
+                    handle = module.register_forward_hook(forward_hook)
+                    hook_handles.append(handle)
+            # new_inputs = accelerator.prepare(new_inputs)
+            # model, new_inputs = accelerator.prepare(model, new_inputs)
+
             next_ = model(**new_inputs)
             ori_input_embed = input_embed
-            # print("phi(x*)", next_.hidden_states, next_.hidden_states.shape)
             target_input_ids = None
-            all_hidden_states = next_.all_hidden_states
     else:    
         raise NotImplementedError
-    # print("target_input-ids", target_input_ids, len(target_input_ids[0]))
-    return target_input_ids, target_attention_mask, ori_input_embed, next_.hidden_states, all_hidden_states
+    for handle in hook_handles:
+        handle.remove()
+    return target_input_ids, target_attention_mask, ori_input_embed, hidden_state_list
 
 
 def update_weight(weight: torch.Tensor, point, exponential, method="exponential"):
@@ -103,7 +179,10 @@ def init_weight_mask(len_cut_output, recover_length, method="exponential", devic
 
 
 def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, invert_method='cosine'):
-    new_input_embed_squeeze = hidden_state.squeeze(0)
+    if len(hidden_state.shape) >= 3:
+        new_input_embed_squeeze = hidden_state.squeeze(0)
+    else:
+        new_input_embed_squeeze = hidden_state
     if invert_method == 'L2':
         '''show by L2 distance'''
         ret_list = []
@@ -118,7 +197,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
         ret_list = []
         for j, embed in enumerate(new_input_embed_squeeze):
             # convert to float32, avoid dividing 0
-            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32)).detach().cpu()
+            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
             '''test the ranking of wrong tokens--most in top 3'''
             print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
             # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
@@ -155,24 +234,6 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
                 acc_30t_cnt += 1
             if j <= 40:
                 acc_40t_cnt += 1
-            # if j < (prompt_length - 1) * 0.1:
-            #     acc_10_cnt += 1
-            # elif j < (prompt_length - 1) * 0.2:
-            #     acc_20_cnt += 1
-            # elif j < (prompt_length - 1) * 0.3:
-            #     acc_30_cnt += 1
-            # elif j < (prompt_length - 1) * 0.4:
-            #     acc_40_cnt += 1
-            # elif j < (prompt_length - 1) * 0.5:
-            #     acc_50_cnt += 1
-            # elif j < (prompt_length - 1) * 0.6:
-            #     acc_60_cnt += 1
-            # elif j < (prompt_length - 1) * 0.7:
-            #     acc_70_cnt += 1
-            # elif j < (prompt_length - 1) * 0.8:
-            #     acc_80_cnt += 1
-            # elif j < (prompt_length - 1) * 0.9:
-            #     acc_90_cnt += 1
     acc = acc_cnt / (len(ret_list))
     print("acc: ", acc)
     ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
@@ -204,10 +265,13 @@ def main():
     # txt_file = open("log-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     
     '''get model'''
-    devices=['cuda:0']
-    model_dir = "lmsys/vicuna-7b-v1.5"
-    # model_dir = "/home/cc/zyg/vicuna-7b-v1.5"
-    tokenizer, model = get_model(model_dir=model_dir, devices=devices)
+    # model_dir = "lmsys/vicuna-7b-v1.5"
+    model_dir = "huggyllama/llama-65b"
+    accelerator = Accelerator()
+    tokenizer, model = get_model(model_dir=model_dir)
+    # model = accelerator.prepare(model)
+    print(str(model.hf_device_map))
+    print(f'\nmemory_allocated {torch.cuda.memory_allocated()}')
 
     total_layers = model.model.layers
     
@@ -219,12 +283,13 @@ def main():
     embed_layer = model.model.get_input_embeddings()
     norm_layer = model.model.norm
     START_EMBED = embed_layer.weight[1].data
-    START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0).to(devices[0])
+    START_EMBED = accelerator.prepare(START_EMBED.unsqueeze(0).unsqueeze(0))
     # print(START_EMBED.shape)
-    _, _, _, _, all_start_hidden_states = get_hidden_state(tokenizer, model, input_embed=START_EMBED, use_rms_norm=True)
-    START_16 = all_start_hidden_states[16]
+    _, _, _, all_start_hidden_states = get_hidden_state(tokenizer, model, accelerator, input_embed=START_EMBED) #, use_rms_norm=True)
+    # START_16 = all_start_hidden_states[16]
     START_EMBED.requires_grad_(False)
-    START_16.requires_grad_(False)
+    # START_16.requires_grad_(False)
+    print(START_EMBED)
     # print(START_16.shape)
 
     '''the original prompt we try to infer'''
@@ -325,8 +390,8 @@ def main():
 
         '''get all hidden states in a list'''
         model.model.layers = total_layers
-        total_input_ids, total_attention_mask, _, total_hidden_states, all_hidden_states = get_hidden_state(tokenizer, 
-                    model, prompt=prompt_, use_rms_norm=True)
+        total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
+                    model, accelerator, prompt=prompt_)
         # print("collected states: {}".format(len(all_hidden_states)))
 
         for state in all_hidden_states[0][0]:
@@ -361,7 +426,7 @@ def main():
 
     '''save pickle file'''
     pickle_piece = (get_sorted_top_k(state_4096, top_k=10, axis=0, reverse=False), get_sorted_top_k(state_4096, top_k=10, axis=0, reverse=True))
-    with open("range.pickle".format(*time.localtime()), "wb") as f:
+    with open("range_llama65B.pickle".format(*time.localtime()), "wb") as f:
         pickle.dump(pickle_piece, f)
 
 

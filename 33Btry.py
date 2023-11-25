@@ -31,9 +31,14 @@ def get_model(model_dir="vicuna-7b-v1.5", model_kwargs={"low_cpu_mem_usage": Tru
     # print(device_map)
     device_map = {}
     print(torch.cuda.device_count())
-    for i in range(60):
+    model_layers = 32
+    if model_dir.endswith("65b"):
+        model_layers = 80
+    elif model_dir.endswith("30b"):
+        model_layers = 60
+    for i in range(model_layers):
         layer = "model.layers." + str(i)
-        device_map[layer] = int(i / 15)
+        device_map[layer] = int(i / model_layers * 4)
     device_map["model.embed_tokens"] = 0
     device_map["model.norm"] = 3
     device_map["lm_head"] = 3
@@ -50,7 +55,24 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
     hook_handles = []
     def forward_hook(module, input, output):
         # print(output)
-        hidden_state_list.append(output)
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(output)
+        else:
+            hidden_state_list.append(output)
+    def full_hook(module, input, output):
+        print("full hook", input)
+        if isinstance(input, tuple):
+            # print(input[0])
+            # print(input[0][0])
+            hidden_state_list.append(input[0])
+        else:
+            hidden_state_list.append(input)
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(output)
+        else:
+            hidden_state_list.append(output)
     if prompt != None:
         with torch.no_grad():
             target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
@@ -61,10 +83,15 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
             '''get hidden states from all layers'''
             for name, module in model.named_modules():
                 # print(name, module)
-                if name.endswith(".mlp"):
+                if name[:13] == "model.layers." and len(name) <= 15:
+                    # print("layer module")
                     # print(name)
-                    handle = module.register_forward_hook(forward_hook)
-                    hook_handles.append(handle)
+                    if int(name[13:]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    else:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
                 elif name == "model.norm":
                     # print("NORM LAYER")
                     handle = module.register_forward_hook(forward_hook)
@@ -83,10 +110,15 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
             '''get hidden states from all layers'''
             for name, module in model.named_modules():
                 # print(name, module)
-                if name.endswith(".mlp"):
+                if name[:13] == "model.layers." and len(name) <= 15:
+                    # print("layer module")
                     # print(name)
-                    handle = module.register_forward_hook(forward_hook)
-                    hook_handles.append(handle)
+                    if int(name[13:]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    else:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
                 elif name == "model.norm":
                     # print("NORM LAYER")
                     handle = module.register_forward_hook(forward_hook)
@@ -214,7 +246,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     '''get model'''
     # model_dir = "lmsys/vicuna-7b-v1.5"
-    model_dir = "huggyllama/llama-30b"
+    model_dir = "huggyllama/llama-65b"
     accelerator = Accelerator()
     tokenizer, model = get_model(model_dir=model_dir)
     # model = accelerator.prepare(model)
@@ -329,13 +361,13 @@ def main():
     ]
 
     '''load range file'''
-    # with open("range_llama30B.pickle", 'rb') as f:
-    #     left, right = pickle.load(f)
-    #     left_range = torch.FloatTensor(left[0][-1]).type(torch.float16)
-    #     right_range = torch.FloatTensor(right[0][-1]).type(torch.float16)
-    left_range = torch.ones(START_EMBED.shape[-1]) * 0.1
-    right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
-    left_range, right_range = left_range.to(model.device), right_range.to(model.device)
+    with open("range_llama65B.pickle", 'rb') as f:
+        left, right = pickle.load(f)
+        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(model.device)
+        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(model.device)
+    # left_range = torch.ones(START_EMBED.shape[-1]) * 0.1
+    # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
+    # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
     prompts = [prompts[13]]
     for prompt_ in prompts:
@@ -346,6 +378,10 @@ def main():
         total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
                     model, accelerator, prompt=prompt_)
         txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states)))
+        print("state 0", all_hidden_states[0], START_EMBED)
+        print("state 60", all_hidden_states[60])
+        print("state last", all_hidden_states[-1])
+        # o=1/0
 
         '''step1: last embedding to input embedding'''
         model.model.layers = total_layers
@@ -353,7 +389,8 @@ def main():
         recover_length = prompt_length
         target_input_ids = total_input_ids
         target_attention_mask = total_attention_mask
-        next_hidden_states_last = all_hidden_states[-1]  # last layer ground truth hidden state (after rms norm)
+        next_hidden_states_last = all_hidden_states[60]  # 60th layer ground truth hidden state (after rms norm)
+        # next_hidden_states_last = all_hidden_states[-1]  # last layer ground truth hidden state (after rms norm)
         # print(torch.min(next_hidden_states_last), torch.min(next_hidden_states_last))
         # print(next_hidden_states_last, START_16)
         # o=1/0
@@ -430,19 +467,14 @@ def main():
                     '''get hidden states from all layers'''
                     for name, module in model.named_modules():
                         # print(name, module)
-                        if name.endswith(".mlp"):
-                            # print(name)
+                        if name == "model.layers.60":
                             handle = module.register_forward_hook(forward_hook)
                             hook_handles.append(handle)
-                        elif name == "model.norm":
-                            # print("NORM LAYER")
-                            handle = module.register_forward_hook(forward_hook)
-                            hook_handles.append(handle)
-
+                    print("collect hidden states: {}".format(len(hook_handles)))
                     phi_relaxed = model(**new_inputs)
                     for handle in hook_handles:
                         handle.remove()
-                    last_hidden_state = hidden_state_list[-1]
+                    last_hidden_state = hidden_state_list[0]
                     hidden_state_list = []
 
                     '''compute loss'''
