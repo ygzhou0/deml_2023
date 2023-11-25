@@ -56,8 +56,10 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
     def forward_hook(module, input, output):
         # print(output)
         if isinstance(output, tuple):
+            # print(output)
             for item in output:
-                hidden_state_list.append(output)
+                # print(item)
+                hidden_state_list.append(item)
         else:
             hidden_state_list.append(output)
     def full_hook(module, input, output):
@@ -70,7 +72,7 @@ def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=Non
             hidden_state_list.append(input)
         if isinstance(output, tuple):
             for item in output:
-                hidden_state_list.append(output)
+                hidden_state_list.append(item)
         else:
             hidden_state_list.append(output)
     if prompt != None:
@@ -395,6 +397,7 @@ def main():
         # print(next_hidden_states_last, START_16)
         # o=1/0
         # next_hidden_states_last = torch.clamp(next_hidden_states_last, min=-10, max=10)
+        # print(next_hidden_states_last)
         next_hidden_states_last = next_hidden_states_last.detach()
         next_hidden_states_last.requires_grad_(False)
         txt_file.write("recovering piece length: {}\n".format(prompt_length))
@@ -462,7 +465,13 @@ def main():
                     hook_handles = []
                     def forward_hook(module, input, output):
                         # print(output)
-                        hidden_state_list.append(output)
+                        if isinstance(output, tuple):
+                            # print(output)
+                            for item in output:
+                                # print(item)
+                                hidden_state_list.append(item)
+                        else:
+                            hidden_state_list.append(output)
             
                     '''get hidden states from all layers'''
                     for name, module in model.named_modules():
@@ -476,8 +485,11 @@ def main():
                         handle.remove()
                     last_hidden_state = hidden_state_list[0]
                     hidden_state_list = []
+                    # print(last_hidden_state)
 
                     '''compute loss'''
+                    next_hidden_states_last = next_hidden_states_last.to(last_hidden_state.device)
+                    # print(last_hidden_state.device)
                     loss_mse = loss_func(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32))
                     print("{} epoch, {} loss".format(i, loss_mse.data))
 
