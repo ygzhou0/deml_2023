@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+import copy
 import pickle
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -408,7 +409,7 @@ def main():
         
         for policy in policies: #[0, 0.002, 0.01]:
             alpha, cut_policy = policy
-            txt_file.write("policy: {}".format(cut_policy))
+            txt_file.write("policy: {}\n".format(cut_policy))
             for prompt_length in [30, 60, len(total_input_ids[0])]:#[5, 10, 20, 30, 40, len(total_input_ids[0])]:
             
                 position = 0
@@ -428,15 +429,15 @@ def main():
                     '''define loss func'''
                     loss_func = torch.nn.MSELoss(reduction='mean')
                     for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-                        total_epoch = 5000
+                        total_epoch = 3000
                         for alpha in [6e-4]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                             # if alpha > 0:
                             #     lr *= 0.1
                             '''try to init input embed'''
-                            if fixed_input_embed == None:
-                                size = (len(target_input_ids[0]) - 1, START_EMBED.shape[-1])
-                            else:
-                                size = (len(target_input_ids[0]), START_EMBED.shape[-1])
+                            # if fixed_input_embed == None:
+                            #     size = (len(target_input_ids[0]) - 1, START_EMBED.shape[-1])
+                            # else:
+                            size = (recover_length, START_EMBED.shape[-1])
                             # means = torch.zeros(size)
                             # new_input_embed_16 = torch.normal(mean=means, std=0.2)
                             # new_input_embed_16 = new_input_embed_16.unsqueeze(0).type(torch.float16).to(devices[0])
@@ -484,31 +485,33 @@ def main():
                             '''start timer'''
                             start = time.time()
 
+                            '''add known information'''
+                            # should I start this fixed part's gradient?
+                            if fixed_input_embed != None:
+                                target_attention_mask_inside = total_attention_mask[:,:(position+recover_length)]
+                                next_hidden_states_inside = next_hidden_states_last[:,:(position+recover_length)]
+                                new_input_embed_0 = torch.cat((fixed_input_embed, new_input_embed_0), dim=1)
+                                # print(fixed_input_embed.shape, new_input_embed_.shape, target_attention_mask_inside.shape, next_hidden_states_inside.shape)
+                                # '''add start token'''
+                                # new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed_), dim=1)
+                            
+                            else:
+                                target_attention_mask_inside = total_attention_mask[:,position:(position+recover_length)]
+                                next_hidden_states_inside = next_hidden_states_last[:,position:(position+recover_length)]                           
+                                # print(target_attention_mask_inside.shape, next_hidden_states_inside.shape)
+                                '''add start token'''
+                                # print("shapes", START_EMBED.shape, new_input_embed_0.shape)
+                                # new_input_embed_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+
                             for i in range(part_epoch):
                                 with torch.no_grad():
                                     new_input_embed_0 = torch.clip(new_input_embed_0, -0.2, 0.2)
+                                
+                                new_input_embed_0 = new_input_embed_0.detach().requires_grad_(True)
+                                # print(new_input_embed_0.shape)
 
-                                new_input_embed_0 = new_input_embed_0.requires_grad_(True)
                                 optim = torch.optim.SGD([new_input_embed_0], lr=lr)
-
-                                '''add known information'''
-                                # should I start this fixed part's gradient?
-                                if fixed_input_embed != None:
-                                    target_attention_mask_inside = total_attention_mask[:,:(position+recover_length)]
-                                    next_hidden_states_inside = next_hidden_states_last[:,:(position+recover_length)]
-                                    new_input_embed_ = torch.cat((fixed_input_embed, new_input_embed_0), dim=1)
-                                    # print(fixed_input_embed.shape, new_input_embed_.shape, target_attention_mask_inside.shape, next_hidden_states_inside.shape)
-                                    # '''add start token'''
-                                    # new_input_embed_ = torch.cat((START_EMBED.unsqueeze(0), new_input_embed_), dim=1)
-                                
-                                else:
-                                    target_attention_mask_inside = total_attention_mask[:,position:(position+recover_length)]
-                                    next_hidden_states_inside = next_hidden_states_last[:,position:(position+recover_length)]                           
-                                    # print(target_attention_mask_inside.shape, next_hidden_states_inside.shape)
-                                    '''add start token'''
-                                    print("shapes", START_EMBED.shape, new_input_embed_0.shape)
-                                    new_input_embed_ = torch.cat((START_EMBED, new_input_embed_0), dim=1)
-                                
+                                new_input_embed_ = new_input_embed_0
                                 # '''add start token'''
                                 # new_input_embed_ = torch.cat((START_EMBED, new_input_embed_0), dim=1)
                                 '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
@@ -637,13 +640,8 @@ def main():
                             # txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
                     position += prompt_length
                     '''add fixed first tokens'''
-                    if fixed_input_embed == None:
-                        new_input_embed_ = torch.cat((START_EMBED, new_input_embed_0), dim=1)
-                        fixed_input_embed = new_input_embed_
-                        # fixed_input_embed.requires_grad_(False)
-                    else:
-                        fixed_input_embed = torch.cat((fixed_input_embed, new_input_embed_0), dim=1)
-                        # fixed_input_embed.requires_grad_(False)
+                    fixed_input_embed = copy.deepcopy(new_input_embed_0)
+                    fixed_input_embed = fixed_input_embed.requires_grad_(False)
                     '''to be considered: should I clear the gradient of this part?'''
 
 
