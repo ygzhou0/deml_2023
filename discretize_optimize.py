@@ -34,11 +34,17 @@ def get_model(model_dir="vicuna-7b-v1.5", model_kwargs={"low_cpu_mem_usage": Tru
     model_layers = 32
     if model_dir.endswith("65b"):
         model_layers = 80
+        for i in range(model_layers - 20):
+            layer = "model.layers." + str(i)
+            device_map[layer] = int(i / (model_layers - 20) * 4)
+        for i in range(model_layers - 20, model_layers):
+            layer = "model.layers." + str(i)
+            device_map[layer] = 'cpu'
     elif model_dir.endswith("30b"):
         model_layers = 60
-    for i in range(model_layers):
-        layer = "model.layers." + str(i)
-        device_map[layer] = int(i / model_layers * 4)
+        for i in range(model_layers):
+            layer = "model.layers." + str(i)
+            device_map[layer] = int(i / (model_layers) * 4)
     device_map["model.embed_tokens"] = 0
     device_map["model.norm"] = 3
     device_map["lm_head"] = 3
@@ -240,7 +246,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
     ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
     print("final result tokens:", ret_tokens)
     
-    return acc, ret_tokens
+    return acc, ret_tokens, ret_list
 
 
 def main():
@@ -248,7 +254,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     '''get model'''
     # model_dir = "lmsys/vicuna-7b-v1.5"
-    model_dir = "huggyllama/llama-65b"
+    model_dir = "huggyllama/llama-30b"
     accelerator = Accelerator()
     tokenizer, model = get_model(model_dir=model_dir)
     # model = accelerator.prepare(model)
@@ -369,7 +375,7 @@ def main():
     ]
 
     '''load range file'''
-    with open("range_llama65B.pickle", 'rb') as f:
+    with open("range_llama30B.pickle", 'rb') as f:
         left, right = pickle.load(f)
         left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(model.device)
         right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(model.device)
@@ -411,7 +417,7 @@ def main():
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
         for lr in [0.3]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-            total_epoch = 2000
+            total_epoch = 3000
             for alpha in [6e-4]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                 # if alpha > 0:
                 #     lr *= 0.1
@@ -459,7 +465,7 @@ def main():
 
                 for i in range(part_epoch):
                     with torch.no_grad():
-                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.2, 0.2)
+                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.17, 0.17)
                     new_input_embed_0 = new_input_embed_0.requires_grad_(True)
                     optim = torch.optim.SGD([new_input_embed_0], lr=lr)
                     # '''add start token'''
@@ -482,7 +488,7 @@ def main():
                     '''get hidden states from all layers'''
                     for name, module in model.named_modules():
                         # print(name, module)
-                        if name == "model.layers.60":
+                        if name == "model.layers.59":
                             handle = module.register_forward_hook(forward_hook)
                             hook_handles.append(handle)
                     # print("collect hidden states: {}".format(len(hook_handles)))
@@ -542,7 +548,7 @@ def main():
                     if (i+1) % 100 == 0 or i == part_epoch - 1:
 
                         end = time.time()
-                        acc, ret_tokens = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        acc, ret_tokens, _ = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
                         print("16 layer result tokens:", ret_tokens)
                         txt_file.write("0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, alpha {}, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), relu_loss, end-start, alpha, ret_tokens))
                         # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
@@ -562,31 +568,45 @@ def main():
                         #     acc_30t_cnt / np.min((30, len(ret_list) - 1)),
                         #     acc_40t_cnt / np.min((40, len(ret_list) - 1))
                         # ))
-                '''save pickle file'''
-                prompt = tokenizer.decode(total_input_ids[0][1:])
-                # pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
-                # with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
-                #     pickle.dump(pickle_piece, f)
+                        
+                    if (i+1) % 1000 == 0:
+                        '''do discretize'''
+                        acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        print("ret_list", ret_list)
+                        # ret_list.insert(0, 1)
+                        ret_list = ret_list[1:]
+                        embed_layer = model.model.get_input_embeddings()
+                        ori_input_embed = embed_layer(torch.tensor(ret_list))
+                        print("decoded embed", ori_input_embed, ori_input_embed.shape, new_input_embed_0.shape)
+                        new_input_embed_0 = ori_input_embed.unsqueeze(0)
 
-                '''16-16 step2: 16 embedding to 0 embedding'''
+                        '''save pickle file'''
+                        # prompt = tokenizer.decode(total_input_ids[0][1:])
+                        # pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
+                        # with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
+                        #     pickle.dump(pickle_piece, f)
 
-                '''get 16 layer total output and total hidden'''
-                # '''cutting layers'''
-                # txt_file.write("cut to 0-16 layers\n")
-                # model.model.layers = total_layers[:16]
-                next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
-                next_hidden_states_0 = next_hidden_states_0.detach()
-                next_hidden_states_0.requires_grad_(False)
-                print("two embeddings:", all_hidden_states[0], next_hidden_states_0)
-                txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[0]), str(next_hidden_states_0)))
-                txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[0][0][1:])), str(torch.min(all_hidden_states[0][0][1:]))))
-                txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[0] > 0.1).sum()))
-                txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_0[0][1:])), str(torch.min(next_hidden_states_0[0][1:]))))
-                txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
-                txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
-                txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
-                txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
-        
+                        '''16-16 step2: 16 embedding to 0 embedding'''
+
+                        '''get 16 layer total output and total hidden'''
+                        # '''cutting layers'''
+                        # txt_file.write("cut to 0-16 layers\n")
+                        # model.model.layers = total_layers[:16]
+                        next_hidden_states_0 = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+                        next_hidden_states_0 = next_hidden_states_0.detach()
+                        next_hidden_states_0.requires_grad_(False)
+                        print("two embeddings:", all_hidden_states[0], next_hidden_states_0)
+                        txt_file.write("two embeddings: \n{} \n{}\n".format(str(all_hidden_states[0]), str(next_hidden_states_0)))
+                        txt_file.write("gt embeddings minmax: \n{} \n{}\n".format(str(torch.max(all_hidden_states[0][0][1:])), str(torch.min(all_hidden_states[0][0][1:]))))
+                        txt_file.write("gt embeddings range: {}\n".format((all_hidden_states[0] > 0.1).sum()))
+                        txt_file.write("ret embeddings minmax: \n{} \n{}\n".format(str(torch.max(next_hidden_states_0[0][1:])), str(torch.min(next_hidden_states_0[0][1:]))))
+                        txt_file.write("two embeddings cos: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)))
+                        txt_file.write("two embeddings cos mean: {}\n".format(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1).mean().data))
+                        txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
+                        txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
+
+                        lr /= 5
+                        txt_file.write("learning rate decrease to {}\n".format(lr))
 
 if __name__ == "__main__":
     main()
