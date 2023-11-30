@@ -34,12 +34,15 @@ def get_model(model_dir="vicuna-7b-v1.5", model_kwargs={"low_cpu_mem_usage": Tru
     model_layers = 32
     if model_dir.endswith("65b"):
         model_layers = 80
-        for i in range(model_layers - 20):
+        for i in range(model_layers):
             layer = "model.layers." + str(i)
-            device_map[layer] = int(i / (model_layers - 20) * 4)
-        for i in range(model_layers - 20, model_layers):
-            layer = "model.layers." + str(i)
-            device_map[layer] = 'cpu'
+            device_map[layer] = int(i / (model_layers) * 4)
+        # for i in range(model_layers - 20):
+        #     layer = "model.layers." + str(i)
+        #     device_map[layer] = int(i / (model_layers - 20) * 4)
+        # for i in range(model_layers - 20, model_layers):
+        #     layer = "model.layers." + str(i)
+        #     device_map[layer] = 'cpu'
     elif model_dir.endswith("30b"):
         model_layers = 60
         for i in range(model_layers):
@@ -207,9 +210,9 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
             dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
             '''test the ranking of wrong tokens--most in top 3'''
             print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
-            # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
-            #     print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
-            #     print("\n\ntopk value", torch.topk(dist_ret, 10))
+            if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
+                print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
+                print("\n\ntopk value", torch.topk(dist_ret, 10))
             ret_list.append(torch.argmax(dist_ret.data))
     else:
         raise NotImplementedError
@@ -254,7 +257,7 @@ def main():
     txt_file = open("log-{}-{}-{}-{}-{}-{}-{}.txt".format(*time.localtime()), "w")
     '''get model'''
     # model_dir = "lmsys/vicuna-7b-v1.5"
-    model_dir = "huggyllama/llama-30b"
+    model_dir = "huggyllama/llama-65b"
     accelerator = Accelerator()
     tokenizer, model = get_model(model_dir=model_dir)
     # model = accelerator.prepare(model)
@@ -375,7 +378,7 @@ def main():
     ]
 
     '''load range file'''
-    with open("range_llama30B.pickle", 'rb') as f:
+    with open("range_llama65B.pickle", 'rb') as f:
         left, right = pickle.load(f)
         left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(model.device)
         right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(model.device)
@@ -465,9 +468,11 @@ def main():
 
                 for i in range(part_epoch):
                     with torch.no_grad():
-                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.17, 0.17)
+                        # new_input_embed_0 = torch.clip(new_input_embed_0, -0.17, 0.17)
+                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.2, 0.2)
                     new_input_embed_0 = new_input_embed_0.requires_grad_(True)
                     optim = torch.optim.SGD([new_input_embed_0], lr=lr)
+                    # txt_file.write("learning rate: {}".format(optim.param_groups[0]["lr"]))
                     # '''add start token'''
                     new_input_embed_ = torch.cat((START_EMBED, new_input_embed_0), dim=1)
                     '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
@@ -605,7 +610,7 @@ def main():
                         txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
                         txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
 
-                        lr /= 5
+                        # lr /= 5
                         txt_file.write("learning rate decrease to {}\n".format(lr))
 
 if __name__ == "__main__":
