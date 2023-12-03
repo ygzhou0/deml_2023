@@ -188,7 +188,7 @@ def init_weight_mask(len_cut_output, recover_length, method="exponential", devic
     return weight_mask
 
 
-def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, invert_method='cosine'):
+def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, invert_method='cosine', filter_nonascii=True):
     if len(hidden_state.shape) >= 3:
         new_input_embed_squeeze = hidden_state.squeeze(0)
     else:
@@ -213,11 +213,25 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
             if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
                 print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
                 print("\n\ntopk value", torch.topk(dist_ret, 10))
-            ret_list.append(torch.argmax(dist_ret.data))
+            idx = 0
+            if filter_nonascii:
+                p = torch.topk(dist_ret, 10).indices[idx]
+                print("token id:", p)
+                while not tokenizer.decode([p]).isascii() or p == 0 or p == 1 or p == 2:
+                    print(idx)
+                    print("filtered", tokenizer.decode(torch.topk(dist_ret, 10).indices[idx]))
+                    idx += 1
+                    if idx == 10:
+                        idx = 0
+                        print("fail to filter non ascii")
+                        break
+                    p = torch.topk(dist_ret, 10).indices[idx]
+            print(tokenizer.decode(torch.topk(dist_ret, 10).indices[idx]))
+            ret_list.append(torch.topk(dist_ret, 10).indices[idx])
     else:
         raise NotImplementedError
     '''show position accuracy'''
-    print("ret: ", ret_list, len(ret_list))
+    # print("ret: ", ret_list, len(ret_list))
     acc_cnt = 0
     acc_10_cnt = 0
     acc_20_cnt = 0
@@ -247,7 +261,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
     acc = acc_cnt / (len(ret_list))
     print("acc: ", acc)
     ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
-    print("final result tokens:", ret_tokens)
+    # print("final result tokens:", ret_tokens)
     
     return acc, ret_tokens, ret_list
 
@@ -559,7 +573,7 @@ def main():
                         txt_file.write("60 layer cos sim: {}\n".format(cos_sim))
                         for sim_index, sim in enumerate(cos_sim[0]):
                             if sim <= 0.95:
-                                print(ret_list, total_input_ids)
+                                # print(ret_list, total_input_ids)
                                 txt_file.write("low confidence place {}, predicted {}, gt {}\n".format(sim_index, ret_list[sim_index], total_input_ids[0][sim_index]))
                         # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
                         #     acc_10_cnt / (0.1 * (recover_length - 1)),
@@ -648,7 +662,13 @@ def main():
         #     to_recover_embedding = to_recover_total[..., position+20:]
         #     gt_embedding = embed_layer(torch.tensor(ret_list[:position+20]))
         #     position += 20
+        '''add finetune stage'''
 
+
+
+        '''try replace'''
+
+        '''try replace'''
 
 if __name__ == "__main__":
     main()
