@@ -213,7 +213,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
 def main():
     '''get model'''
     # model_dir = "lmsys/vicuna-7b-v1.5"
-    model_dir = "huggyllama/llama-65b"
+    model_dir = "huggyllama/llama-30b"
     accelerator = Accelerator()
     tokenizer, model = get_model(model_dir=model_dir)
     # model = accelerator.prepare(model)
@@ -226,15 +226,15 @@ def main():
     embed_layer = model.model.get_input_embeddings()
     norm_layer = model.model.norm
 
-    target_string = "yes sir"
+    # target_string = "yes sir"
     # next_target_token = tokenizer("." + target_string[0], padding=True, truncation=False, return_tensors='pt')
     # print("next_token", next_target_token)
-    inputs = tokenizer(target_string, truncation=False, padding=True, return_tensors='pt')
-    print(inputs)
+    # inputs = tokenizer(target_string, truncation=False, padding=True, return_tensors='pt')
+    # print(inputs)
     print(embed_layer.weight.shape)
-    o=1/0
+    # o=1/0
 
-    loss_func = torch.nn.MSELoss(reduction='mean')
+    # loss_func = torch.nn.MSELoss(reduction='mean')
     
     '''freeze model parameter'''
     # print(model.parameters())
@@ -242,15 +242,16 @@ def main():
         # print(param)
         param.requires_grad = False
 
-    prompt = "yes Yes sir, but I have to go home now"
-    model.model.layers = total_layers[:16]
-    target_input_ids, _, _, _, _ = get_hidden_state(tokenizer, model, prompt, use_rms_norm=False)
+    prompt = "the The yes Yes sir Sir, but I have to go home now"
+    # model.model.layers = total_layers[:16]
+    target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
+    target_input_ids = target_token['input_ids']
     print(target_input_ids)
 
     
     new_input_embed_np = np.random.uniform(low=-0.01, high=0.01, size=(1, 4096))
     new_input_embed_0 = torch.FloatTensor(new_input_embed_np)
-    new_input_embed_0 = new_input_embed_0.type(torch.float16).to(devices[0])
+    new_input_embed_0 = new_input_embed_0.type(torch.float16)
     
     print(torch.norm(embed_layer.weight[4874] - embed_layer.weight[8889], p=2, dim=0))
     print(torch.norm(embed_layer.weight[541] - embed_layer.weight[505], p=2, dim=0))
@@ -258,6 +259,16 @@ def main():
     print(torch.norm(embed_layer.weight[306] - embed_layer.weight[748], p=2, dim=0))
     print(torch.norm(embed_layer.weight[4874] - embed_layer.weight[3869], p=2, dim=0))
     print(torch.norm(embed_layer.weight[4873] - embed_layer.weight[3868], p=2, dim=0))
+
+
+    print(F.cosine_similarity(embed_layer.weight[4874], embed_layer.weight[8889], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[541], embed_layer.weight[505], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[3271], embed_layer.weight[748], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[306], embed_layer.weight[748], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[4874], embed_layer.weight[3869], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[4873], embed_layer.weight[3868], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[278], embed_layer.weight[450], dim=-1))
+    print(F.cosine_similarity(embed_layer.weight[6290], embed_layer.weight[8889], dim=-1))
 
     # weight_average = embed_layer.weight[0]
     # for i in range(1, 31999):

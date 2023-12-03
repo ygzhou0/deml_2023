@@ -549,13 +549,18 @@ def main():
 
                     if (i+1) % 25 == 0 or i == part_epoch - 1:
                         txt_file.write("cos sim: {}\n".format(cos_sim.mean().data))
-
+    
                     if (i+1) % 100 == 0 or i == part_epoch - 1:
-
                         end = time.time()
-                        acc, ret_tokens, _ = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
                         print("16 layer result tokens:", ret_tokens)
                         txt_file.write("0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, alpha {}, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), relu_loss, end-start, alpha, ret_tokens))
+                        
+                        txt_file.write("60 layer cos sim: {}\n".format(cos_sim))
+                        for sim_index, sim in enumerate(cos_sim[0]):
+                            if sim <= 0.95:
+                                print(ret_list, total_input_ids)
+                                txt_file.write("low confidence place {}, predicted {}, gt {}\n".format(sim_index, ret_list[sim_index], total_input_ids[0][sim_index]))
                         # txt_file.write("10% {}, 20% {}, 30% {}, 40% {}, 50% {}, 60% {}, 70% {}, 80% {}, 90% {}\n\n".format(
                         #     acc_10_cnt / (0.1 * (recover_length - 1)),
                         #     acc_20_cnt / (0.1 * (recover_length - 1)),
@@ -579,11 +584,12 @@ def main():
                         acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
                         print("ret_list", ret_list)
                         # ret_list.insert(0, 1)
-                        ret_list = ret_list[1:]
+                        ret_list_withoutstart = ret_list[1:]
                         embed_layer = model.model.get_input_embeddings()
-                        ori_input_embed = embed_layer(torch.tensor(ret_list))
+                        ori_input_embed = embed_layer(torch.tensor(ret_list_withoutstart))
                         print("decoded embed", ori_input_embed, ori_input_embed.shape, new_input_embed_0.shape)
-                        new_input_embed_0 = ori_input_embed.unsqueeze(0)
+                        '''whether to do this discretization!!'''
+                        # new_input_embed_0 = ori_input_embed.unsqueeze(0)
 
                         '''save pickle file'''
                         # prompt = tokenizer.decode(total_input_ids[0][1:])
@@ -610,8 +616,39 @@ def main():
                         txt_file.write("two embeddings cos minmax: {} \n {} \n".format(torch.max(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1)), torch.min(F.cosine_similarity(all_hidden_states[0].type(torch.float32), next_hidden_states_0.type(torch.float32), dim=-1))))
                         txt_file.write("two embeddings L2: {}\n".format(torch.norm(all_hidden_states[0].type(torch.float32) - next_hidden_states_0.type(torch.float32), p=2, dim=-1).detach().cpu()))
 
-                        # lr /= 5
                         txt_file.write("learning rate decrease to {}\n".format(lr))
+
+                        # end = time.time()
+                        # acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        # print("16 layer result tokens:", ret_tokens)
+                        # txt_file.write("discretized: 0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, alpha {}, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), relu_loss, end-start, alpha, ret_tokens))
+                        
+                        # txt_file.write("discretized: 60 layer cos sim: {}\n".format(cos_sim))
+                        # for sim_index, sim in enumerate(cos_sim[0]):
+                        #     if sim <= 0.95:
+                        #         print(ret_list, total_input_ids)
+                        #         txt_file.write("low confidence place {}, predicted {}, gt {}\n".format(sim_index, ret_list[sim_index], total_input_ids[0][sim_index]))
+                        
+                    
+
+
+        '''add finetune stage'''
+        print(ret_tokens)
+        print(len(ret_list))
+        print(next_hidden_states_0.shape)
+        position = 0
+        to_recover_total = next_hidden_states_0
+        '''finetune 20 tokens per 100 epoch'''
+        # while position < len(ret_tokens):
+        #     if position + 20 < len(ret_tokens):
+        #         patch = 20
+        #     else:
+        #         patch = len(ret_tokens)
+        #         break
+        #     to_recover_embedding = to_recover_total[..., position+20:]
+        #     gt_embedding = embed_layer(torch.tensor(ret_list[:position+20]))
+        #     position += 20
+
 
 if __name__ == "__main__":
     main()
