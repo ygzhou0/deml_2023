@@ -293,6 +293,79 @@ def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_lay
     return last_hidden_state
 
 
+def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_input_ids, invert_method='cosine', filter_nonascii=True, top_k=10):
+    embed_layer = model.model.get_input_embeddings()
+    if len(hidden_state.shape) >= 3:
+        new_input_embed_squeeze = hidden_state.squeeze(0)
+    else:
+        new_input_embed_squeeze = hidden_state
+    ret_list = []
+    ret_top_k = []
+    if invert_method == 'L2':
+        '''show by L2 distance (to be accomplished)'''
+        for embed in new_input_embed_squeeze:
+            dist_ret = torch.norm(embed_layer.weight - embed, p=2, dim=1)
+            ret_list.append(torch.argmin(dist_ret.data.cpu()))
+            ret_top_k.append(torch.topk(dist_ret, top_k).indices)
+    elif invert_method == 'cosine':
+        '''show by cosine similarity'''
+        for j, embed in enumerate(new_input_embed_squeeze):
+            # convert to float32, avoid dividing 0
+            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
+            '''test the ranking of wrong tokens--most in top 3'''
+            print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
+            ret_top_k.append(torch.topk(dist_ret, top_k).indices)
+            if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
+                print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
+                print("\n\ntopk value", torch.topk(dist_ret, top_k))
+            idx = 0
+            if filter_nonascii:
+                p = torch.topk(dist_ret, top_k).indices[idx]
+                print("token id:", p)
+                while not tokenizer.decode([p]).isascii() or p == 0 or p == 2:# or p == 1:
+                    print(idx)
+                    print("filtered", tokenizer.decode(torch.topk(dist_ret, top_k).indices[idx]))
+                    idx += 1
+                    if idx == top_k:
+                        idx = 0
+                        print("fail to filter non ascii")
+                        break
+                    p = torch.topk(dist_ret, top_k).indices[idx]
+            print(tokenizer.decode(torch.topk(dist_ret, top_k).indices[idx]))
+            ret_list.append(torch.topk(dist_ret, top_k).indices[idx])
+    else:
+        raise NotImplementedError
+
+    print("......start replacing......")
+    for i, top_list in enumerate(ret_top_k):
+        cos_sim_list = []
+        for item in top_list:
+            if filter_nonascii and (not tokenizer.decode([item]).isascii() or item == 0 or item == 2):
+                cos_sim_list.append(0)
+                continue
+            replaced_ret_list = copy.deepcopy(ret_list)
+            replaced_ret_list[i] = item
+            new_hidden_state = forward_and_get_last_hidden_state(model, replaced_ret_list, None)
+            cos_sim = F.cosine_similarity(new_hidden_state.type(torch.float32), gt_hidden_state.type(torch.float32), dim=-1)
+            # print(cos_sim.shape)
+            cos_sim_list.append(cos_sim[0][i].data.cpu())
+        idx = np.argmax(cos_sim_list)
+        ret_list[i] = ret_top_k[i][idx]
+        print(i)
+        print(tokenizer.decode([ret_top_k[i][idx]]))
+
+    print("......calculating accuracy......")
+    '''show accuracy'''
+    acc_cnt = 0
+    prompt_length = len(total_input_ids[0])
+    for j in range(prompt_length):
+        if total_input_ids[0][j] == ret_list[j]:
+            acc_cnt += 1
+    acc = acc_cnt / (len(ret_list))
+    print("acc: ", acc)
+    ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
+    return acc, ret_tokens, ret_list
+
 
 def main():
     '''create log file'''
@@ -338,7 +411,7 @@ def main():
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     "Lily hit Susan in her face. Susan was pretty angry and shouted her boyfriend Tom for help. However, Tom was playing computer games with Peter. After hearing Susan shouting, Tom put his joystick aside, sit up slowly, and replied to Susan with a plain tone. \"Ok, Ok, I'm coming soon.\" ",
     # "I fly at least once a month London to New York.",
-    # "The moment Scrooge's hand was on the lock, a strange voice called him by his name, and bade him enter. He obeyed. ",
+    "The moment Scrooge's hand was on the lock, a strange voice called him by his name, and bade him enter. He obeyed. ",
     # "The moment Scrooge's hand was on the lock, a strange voice called him by his name, and bade him enter. He obeyed. ",
     # "The moment Scrooge's hand was on the lock, a strange voice called him by his name, and bade him enter. He obeyed. ",
     "We have long been expecting you, said Steve, going into his room and letting Levin's hand go as though to show that here all danger was over. \"I am very, very glad to see you,\" he went on. \"Well, how are you? Eh? When did you come?\" Levin was silent, looking at the unknown faces of Oblonsky's two companions, and especially at the hand of the elegant Greg, which had such long white fingers, such long yellow filbert-shaped nails, and such huge shining studs on the shirt-cuff, that apparently they absorbed all his attention, and allowed him no freedom of thought. Oblonsky noticed this at once, and smiled. I have the honor of knowing your brother, Sergey Ivanovitch, said Greg, holding out his slender hand with its long nails.",
@@ -428,7 +501,7 @@ def main():
     # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
-    prompts = prompts[15:16]  #[:6]
+    prompts = prompts[10:11]  #[:6]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
@@ -767,6 +840,8 @@ def main():
         #         txt_file.write("replaced cosine similarity: mean {}\n list: {}\n".format(cos_sim.mean(), cos_sim))
         #         ret_list[j] = tmp
         '''try replacing wrong token with correct one'''
+        acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, invert_method='cosine')
+        txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
 
 if __name__ == "__main__":
     main()
