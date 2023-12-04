@@ -501,7 +501,7 @@ def main():
     # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
-    prompts = prompts[10:11]  #[:6]
+    prompts = prompts[16:17]  #[:6]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
