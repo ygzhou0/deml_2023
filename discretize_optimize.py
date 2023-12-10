@@ -189,7 +189,9 @@ def init_weight_mask(len_cut_output, recover_length, method="exponential", devic
     return weight_mask
 
 
-def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, invert_method='cosine', filter_nonascii=True):
+def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=None, invert_method='cosine', filter_nonascii=True):
+    if f != None:
+        sys.stdout = f
     if len(hidden_state.shape) >= 3:
         new_input_embed_squeeze = hidden_state.squeeze(0)
     else:
@@ -263,7 +265,8 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, inve
     print("acc: ", acc)
     ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
     # print("final result tokens:", ret_tokens)
-    
+    if f != None:
+        sys.stdout = sys.__stdout__
     return acc, ret_tokens, ret_list
 
 
@@ -293,7 +296,9 @@ def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_lay
     return last_hidden_state
 
 
-def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_input_ids, invert_method='cosine', filter_nonascii=True, top_k=10):
+def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_input_ids, f=None, invert_method='cosine', filter_nonascii=True, top_k=10):
+    if f != None:
+        sys.stdout = f
     embed_layer = model.model.get_input_embeddings()
     if len(hidden_state.shape) >= 3:
         new_input_embed_squeeze = hidden_state.squeeze(0)
@@ -315,7 +320,7 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
             dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
             '''test the ranking of wrong tokens--most in top 3'''
             print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
-            ret_top_k.append(torch.topk(dist_ret, top_k).indices)
+            ret_top_k.append(torch.topk(dist_ret, top_k).indices.tolist())
             if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
                 print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
                 print("\n\ntopk value", torch.topk(dist_ret, top_k))
@@ -340,7 +345,15 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
     print("......start replacing......")
     for i, top_list in enumerate(ret_top_k):
         cos_sim_list = []
+        '''method 2: combine top cosine and top perplexity, use 60 layer as criteria'''
+        if i > 0:
+            input_ids = copy.deepcopy(ret_list[:i])
+            perplexity, topk_ids = get_perplexity(input_ids, model, top_k=10)
+            print("top perplexity position:", perplexity, topk_ids.tolist())
+            top_list += topk_ids.tolist()
+        print("top list", top_list)
         for item in top_list:
+            # print(item)
             if filter_nonascii and (not tokenizer.decode([item]).isascii() or item == 0 or item == 2):
                 cos_sim_list.append(0)
                 continue
@@ -351,23 +364,27 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
             cos_sim = F.cosine_similarity(new_hidden_state.type(torch.float32), gt_hidden_state.type(torch.float32), dim=-1)
             # print(cos_sim.shape)
             cos_sim_list.append(cos_sim[0][i].data.cpu())
-        score = torch.zeros(32000)
-        for j, cos_sim_value in enumerate(cos_sim_list):
-            score[top_list[j]] += cos_sim_value
-        '''add perplexity metric'''
-        if i > 0:
-            input_ids = copy.deepcopy(ret_list[:i])
-            perplexity, topk_ids = get_perplexity(input_ids, model, top_k=10)
-            for j, token_id in enumerate(topk_ids):
-                score[token_id] += 1 * perplexity[j]
-
+        '''method 1: add up cosine and perplexity'''
+        # score = torch.zeros(32000)
+        # for j, cos_sim_value in enumerate(cos_sim_list):
+        #     score[top_list[j]] += cos_sim_value
+        # print("top cosine position:", torch.topk(score, 10))
+        # '''add perplexity metric'''
+        # if i > 0:
+        #     input_ids = copy.deepcopy(ret_list[:i])
+        #     perplexity, topk_ids = get_perplexity(input_ids, model, top_k=10)
+        #     print("top perplexity position:", perplexity, topk_ids)
+        #     for j, token_id in enumerate(topk_ids):
+        #         score[token_id] += 0.8 * perplexity[j]
         # idx = np.argmax(cos_sim_list)
-        print("top score position:", torch.topk(score, 10))
-        idx = np.argmax(score)
-        # ret_list[i] = ret_top_k[i][idx]
-        ret_list[i] = idx
-        print(i)
-        print(tokenizer.decode([idx]))
+        # print("top score position:", torch.topk(score, 10))
+        # idx = np.argmax(score)
+        idx = np.argmax(cos_sim_list)
+        ret_list[i] = top_list[idx]
+
+        # ret_list[i] = idx
+        # print(i)
+        print(tokenizer.decode([top_list[idx]]))
 
     print("......calculating accuracy......")
     '''show accuracy'''
@@ -379,6 +396,8 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
     acc = acc_cnt / (len(ret_list))
     print("acc: ", acc)
     ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
+    if f != None:
+        sys.stdout = sys.__stdout__
     return acc, ret_tokens, ret_list
 
 
@@ -389,7 +408,7 @@ def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="mode
         inputs = {'input_ids': input_ids, 'attention_mask': None}
     else:
         inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0), 'attention_mask': None}
-    print(inputs['input_ids'].shape)
+    # print(inputs['input_ids'].shape)
     def forward_hook(module, input, output):
         if isinstance(output, tuple):
             for item in output:
@@ -551,7 +570,8 @@ def main():
     # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
-    prompts = prompts[1:]  #[:6]
+    # prompts = prompts[1:]  #[:6]
+    prompts = prompts[3:4]
     for prompt_ in prompts:
         txt_file.write("recovering {}\n".format(prompt_))
 
@@ -725,7 +745,7 @@ def main():
     
                     if (i+1) % 100 == 0 or i == part_epoch - 1:
                         end = time.time()
-                        acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, f=txt_file, invert_method='cosine')
                         print("16 layer result tokens:", ret_tokens)
                         txt_file.write("0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, alpha {}, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), relu_loss, end-start, alpha, ret_tokens))
                         
@@ -754,7 +774,7 @@ def main():
                         
                     if (i+1) % 1000 == 0:
                         '''do discretize'''
-                        acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                        acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), tokenizer, embed_layer, total_input_ids, f=txt_file, invert_method='cosine')
                         print("ret_list", ret_list)
                         # ret_list.insert(0, 1)
                         ret_list_withoutstart = ret_list[1:]
@@ -897,8 +917,10 @@ def main():
         #         txt_file.write("replaced cosine similarity: mean {}\n list: {}\n".format(cos_sim.mean(), cos_sim))
         #         ret_list[j] = tmp
         '''try replacing wrong token with correct one'''
-        acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, invert_method='cosine')
+        acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, f=txt_file, invert_method='cosine')
         txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
+
+    txt_file.close()
 
 if __name__ == "__main__":
     main()
