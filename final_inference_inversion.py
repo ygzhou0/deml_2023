@@ -497,10 +497,10 @@ def main():
                 # with open("result-0layer-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
                 #     pickle.dump(pickle_piece, f)
 
-    '''try replacing wrong token with correct one'''
-    acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, f=txt_file, invert_method='cosine')
-    txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
-    txt_file.close()
+        '''try replacing wrong token with correct one'''
+        acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, f=txt_file, invert_method='cosine')
+        txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
+        txt_file.close()
 
 if __name__ == "__main__":
     main()
