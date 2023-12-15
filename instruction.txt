@@ -3,4 +3,13 @@ sh Miniconda3-latest-Linux-x86_64.sh
 conda create -n llama python=3.10
 conda activate llama
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
+git clone https://github.com/ygzhou0/deml_2023
+cd deml_2023
 pip install -r requirements.txt
+cd ..
+git lfs install
+GIT_LFS_SKIP_SMUDGE=1
+git clone https://huggingface.co/medalpaca/medalpaca-lora-7b-16bit
+mv medalpaca-lora-7b-16bit my-medalpaca-lora-7b-16bit
+cd deml_2023
+cp adapter_config.json ../my-medalpaca-lora-7b-16bit/
