@@ -274,7 +274,7 @@ def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_lay
     # embed_layer = model.model.get_input_embeddings()
     # ori_input_embed = embed_layer(torch.tensor(input_ids))
     # new_inputs = {'inputs_embeds': torch.tensor(input_ids).unsqueeze(0), 'attention_mask': attention_mask} 
-    new_inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0), 'attention_mask': attention_mask} 
+    new_inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': attention_mask} 
 
     hidden_state_list = []
     hook_handles = []
@@ -405,9 +405,9 @@ def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="mode
     hidden_state_list = []
     hook_handles = []
     if isinstance(input_ids, torch.Tensor):
-        inputs = {'input_ids': input_ids, 'attention_mask': None}
+        inputs = {'input_ids': input_ids.to(model.device), 'attention_mask': None}
     else:
-        inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0), 'attention_mask': None}
+        inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': None}
     # print(inputs['input_ids'].shape)
     def forward_hook(module, input, output):
         if isinstance(output, tuple):

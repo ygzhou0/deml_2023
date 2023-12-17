@@ -5,130 +5,62 @@ import sys
 import time
 import pickle
 import copy
-import json
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
-from peft import PeftModel, LoraConfig, get_peft_model
 from transformers import (AutoModelForCausalLM, AutoTokenizer, AutoConfig, top_k_top_p_filtering)
 from accelerate import Accelerator, dispatch_model, infer_auto_device_map
 
 
 # not only vicuna, I should try other version of llama
-def get_model(base_model_name = "baffo32/decapoda-research-llama-7B-hf",
-              lora_model_name = "/home/cc/zyg/my-medalpaca-lora-7b-16bit",
-              model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-        **model_kwargs
-    )
+def get_model(model_dir="vicuna-7b-v1.5", model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     tokenizer = AutoTokenizer.from_pretrained(
-        base_model_name,
+        model_dir,
         trust_remote_code=True,
         use_fast=False
     )
     if not tokenizer.pad_token:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = 'left'
-    lora_model = PeftModel.from_pretrained(base_model, lora_model_name, torch_dtype=torch.float16)
-    print("LORAMODEL:\n", lora_model)
-    lora_model.print_trainable_parameters()
-
-    # lora_model = lora_model.merge_and_unload(progressbar=True)
-    # lora_model.disable_adapters()
-
-    lora_model.to("cuda:1")
-    print("MODEL:\n", lora_model)
-    lora_model.gradient_checkpointing = True
-    print(lora_model.device)
-    # with open("adapter_config.json") as f:
-    #     adapter_config = json.load(f)
-    # lora_config = LoraConfig(**adapter_config)
-    # print(lora_config)
-    # model = get_peft_model(base_model, lora_config)
-    # print(model)
-    # o=1/0
-    return tokenizer, lora_model
-
-
-def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_attention_mask=None):
-    assert(prompt != None or input_embed != None)
-    hidden_state_list = []
-    hook_handles = []
-    def forward_hook(module, input, output):
-        if isinstance(output, tuple):
-            for item in output:
-                hidden_state_list.append(item)
-        else:
-            hidden_state_list.append(output)
-    def full_hook(module, input, output):
-        print("full hook", input)
-        if isinstance(input, tuple):
-            hidden_state_list.append(input[0])
-        else:
-            hidden_state_list.append(input)
-        if isinstance(output, tuple):
-            for item in output:
-                hidden_state_list.append(item)
-        else:
-            hidden_state_list.append(output)
-    if prompt != None:
-        with torch.no_grad():
-            target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
-            target_input_ids = target_token['input_ids'].to(model.device)
-            target_attention_mask = target_token['attention_mask'].to(model.device)
-            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
-            
-            '''get hidden states from all layers'''
-            for name, module in model.named_modules():
-                print(name, module)
-                if name[:30] == "base_model.model.model.layers." and len(name) <= 32:
-                    if int(name[30:]) == 0:
-                        handle = module.register_forward_hook(full_hook)
-                        hook_handles.append(handle)
-                    elif int(name[30:]) <= 20:
-                        handle = module.register_forward_hook(forward_hook)
-                        hook_handles.append(handle)
-                # elif name == "base_model.model.model.norm":
-                #     handle = module.register_forward_hook(forward_hook)
-                #     hook_handles.append(handle)
-
-            next_ = model(**inputs)
-            embed_layer = model.model.get_input_embeddings()
-            ori_input_embed = embed_layer(target_input_ids)
-
-    elif input_embed != None:
-        with torch.no_grad():
-            input_embed.to(model.device)
-            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask}
-
-            '''get hidden states from all layers'''
-            for name, module in model.named_modules():
-                print(name, module)
-                if name[:30] == "base_model.model.model.layers." and len(name) <= 32:
-                    if int(name[30:]) == 0:
-                        handle = module.register_forward_hook(full_hook)
-                        hook_handles.append(handle)
-                    elif int(name[30:]) <= 20:
-                        handle = module.register_forward_hook(forward_hook)
-                        hook_handles.append(handle)
-                # elif name == "base_model.model.model.norm":
-                #     handle = module.register_forward_hook(forward_hook)
-                #     hook_handles.append(handle)
-
-            next_ = model(**new_inputs)
-            ori_input_embed = input_embed
-            target_input_ids = None
-    else:    
-        raise NotImplementedError
-    for handle in hook_handles:
-        handle.remove()
-    return target_input_ids, target_attention_mask, ori_input_embed, hidden_state_list
+    model = AutoModelForCausalLM.from_pretrained(
+        model_dir,
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+        **model_kwargs
+    )
+    # device_map = infer_auto_device_map(model)
+    # print(device_map)
+    device_map = {}
+    print(torch.cuda.device_count())
+    model_layers = 32
+    if model_dir.endswith("65b"):
+        model_layers = 80
+        for i in range(model_layers):
+            layer = "model.layers." + str(i)
+            device_map[layer] = int(i / (model_layers) * 4)
+        # for i in range(model_layers - 20):
+        #     layer = "model.layers." + str(i)
+        #     device_map[layer] = int(i / (model_layers - 20) * 4)
+        # for i in range(model_layers - 20, model_layers):
+        #     layer = "model.layers." + str(i)
+        #     device_map[layer] = 'cpu'
+    elif model_dir.endswith("30b"):
+        model_layers = 60
+        for i in range(model_layers):
+            layer = "model.layers." + str(i)
+            device_map[layer] = int(i / (model_layers) * 4)
+    device_map["model.embed_tokens"] = 0
+    device_map["model.norm"] = 3
+    device_map["lm_head"] = 3
+    
+    # print(device_map)
+    # model = dispatch_model(model, device_map=device_map)
+    model = model.to("cuda:2")
+    model.gradient_checkpointing = True
+    return tokenizer, model
 
 
-def get_hidden_state_base(tokenizer, model, prompt=None, input_embed=None, target_attention_mask=None):
+def get_hidden_state(tokenizer, model, accelerator, prompt=None, input_embed=None, target_attention_mask=None):
     assert(prompt != None or input_embed != None)
     hidden_state_list = []
     hook_handles = []
@@ -197,7 +129,7 @@ def get_hidden_state_base(tokenizer, model, prompt=None, input_embed=None, targe
                     if int(name[13:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    else:
+                    elif int(name[13:]) <= 20:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "model.norm":
@@ -238,7 +170,8 @@ def update_weight(weight: torch.Tensor, point, exponential, method="exponential"
     return weight
 
 
-def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:1']):
+
+def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:2']):
     if method == "exponential":
         weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
         weight_mask[:recover_length] = 1 / recover_length
@@ -280,14 +213,14 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=No
             # convert to float32, avoid dividing 0
             dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
             '''test the ranking of wrong tokens--most in top 3'''
-            print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
-            if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
-                print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
-                print("\n\ntopk value", torch.topk(dist_ret, 10))
+            # print("best position and its cosine value:", torch.argmax(dist_ret.data), torch.max(dist_ret.data))
+            # if torch.argmax(dist_ret.data) != total_input_ids.cpu()[0][j]:
+            #     print("correct position and its cosine value:", total_input_ids.cpu()[0][j], dist_ret[total_input_ids.cpu()[0][j]])
+            #     print("\n\ntopk value", torch.topk(dist_ret, 10))
             idx = 0
             if filter_nonascii:
                 p = torch.topk(dist_ret, 10).indices[idx]
-                print("token id:", p)
+                # print("token id:", p)
                 while not tokenizer.decode([p]).isascii() or p == 0 or p == 2:# or p == 1:
                     print(idx)
                     print("filtered", tokenizer.decode(torch.topk(dist_ret, 10).indices[idx]))
@@ -361,6 +294,7 @@ def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_lay
     for handle in hook_handles:
         handle.remove()
     last_hidden_state = hidden_state_list[0]
+    # print("num of hidden states", len(hidden_state_list))
     return last_hidden_state
 
 
@@ -397,7 +331,7 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
                 p = torch.topk(dist_ret, top_k).indices[idx]
                 # print("token id:", p)
                 while not tokenizer.decode([p]).isascii() or p == 0 or p == 2:# or p == 1:
-                    # print(idx)
+                    print(idx)
                     # print("filtered", tokenizer.decode(torch.topk(dist_ret, top_k).indices[idx]))
                     idx += 1
                     if idx == top_k:
@@ -506,10 +440,32 @@ def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="mode
 
 def main():
     '''create log file'''
-    txt_file = open("with-lora-{}-{}-{}-{}-{}-{}-{}.log".format(*time.localtime()), "w")
+    txt_file = open("no-lora-{}-{}-{}-{}-{}-{}-{}.log".format(*time.localtime()), "w")
     '''get model'''
     # model_dir = "lmsys/vicuna-7b-v1.5"
-    # model_dir = "huggyllama/llama-65b"
+    model_dir = "baffo32/decapoda-research-llama-7B-hf"
+    accelerator = Accelerator()
+    tokenizer, model = get_model(model_dir=model_dir)
+    
+    '''freeze model parameter'''
+    for param in model.parameters():
+        param.requires_grad = False
+
+    '''fix <start> token'''
+    embed_layer = model.model.get_input_embeddings()
+    norm_layer = model.model.norm
+    START_EMBED = embed_layer.weight[0].data
+    START_EMBED = accelerator.prepare(START_EMBED.unsqueeze(0).unsqueeze(0))
+    # print(START_EMBED.shape)
+    # _, _, _, all_start_hidden_states = get_hidden_state(tokenizer, model, accelerator, input_embed=START_EMBED) #, use_rms_norm=True)
+    # START_16 = all_start_hidden_states[16]
+    START_EMBED.requires_grad_(False)
+    # START_16.requires_grad_(False)
+    # print(START_EMBED)
+    # print(torch.max(embed_layer.weight), torch.min(embed_layer.weight))
+    # print(tokenizer("yes sir", truncation=False, padding=True, return_tensors='pt'))
+    # o=1/0
+
 
     '''the original prompt we try to infer'''
     prompts = [
@@ -536,8 +492,8 @@ def main():
     '''load range file'''
     with open("range_llama7Bhf.pickle", 'rb') as f:
         left, right = pickle.load(f)
-        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to("cuda:1")
-        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to("cuda:1")
+        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to(model.device)
+        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to(model.device)
     # left_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
@@ -545,40 +501,27 @@ def main():
     # prompts = prompts[1:]  #[:6]
     # prompts = prompts[0:1]
     for prompt_ in prompts:
-        tokenizer, model = get_model()
-        
-        '''freeze model parameter'''
-        for param in model.parameters():
-            param.requires_grad = False
-
-        '''fix <start> token'''
-        embed_layer = model.model.get_input_embeddings()
-        norm_layer = model.model.model.norm
-        START_EMBED = embed_layer.weight[0].data
-        START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0).to("cuda:1")
-        START_EMBED.requires_grad_(False)
-        print(START_EMBED)
-
-
         txt_file.write("recovering {}\n".format(prompt_))
 
         '''get all hidden states in a list'''
+        # model.model.layers = total_layers
         total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
-                    model, prompt=prompt_)
+                    model, accelerator, prompt=prompt_)
         txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states)))
         print("state 0", all_hidden_states[0], START_EMBED)
+        # print("state 60", all_hidden_states[60])
         print("state last", all_hidden_states[-1])
-        
-        '''disable lora'''
-        model = model.merge_and_unload(progressbar=True)
-        # total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state_base(tokenizer, 
-        #             model, prompt=prompt_)
-        # txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states)))
-        # print("state 0", all_hidden_states[0], START_EMBED)
-        # print("state last", all_hidden_states[-1])
+
+        '''test perplexity for "yes"'''
+        # perplexity, topk_ids = get_perplexity(total_input_ids, model, top_k=10)
+        # print(perplexity, topk_ids)
+        # print(tokenizer.decode(topk_ids))
+        # acc, ret_tokens, ret_list = invert_and_find_best(all_hidden_states[60], all_hidden_states[70], tokenizer, model, total_input_ids, invert_method='cosine')
+        # txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
         # o=1/0
 
         '''step1: last embedding to input embedding'''
+        # model.model.layers = total_layers
         prompt_length = len(total_input_ids[0])
         recover_length = prompt_length
         target_input_ids = total_input_ids
@@ -596,9 +539,9 @@ def main():
 
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
-        for lr in [0.1]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
+        for lr in [0.1]: #[0.05, 0.1, 0.2, 0.5]:#[0.05 * len(target_input_ids[0])]:
             total_epoch = 2000
-            for alpha in [1e-3]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
+            for alpha in [1e-3]: # [0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                 # if alpha > 0:
                 #     lr *= 0.1
                 '''try to init input embed'''
@@ -645,8 +588,9 @@ def main():
 
                 for i in range(part_epoch):
                     with torch.no_grad():
-                        # new_input_embed_0 = torch.clip(new_input_embed_0, -0.17, 0.17)
                         new_input_embed_0 = torch.clip(new_input_embed_0, -0.06, 0.06)
+                        # new_input_embed_0 = torch.clip(new_input_embed_0, -0.2, 0.2)
+                        # new_input_embed_0 = torch.clip(new_input_embed_0, -0.25, 0.25)
                     new_input_embed_0 = new_input_embed_0.requires_grad_(True)
                     optim = torch.optim.SGD([new_input_embed_0], lr=lr)
                     # txt_file.write("learning rate: {}".format(optim.param_groups[0]["lr"]))
@@ -809,100 +753,100 @@ def main():
                     
 
 
-        '''add finetune stage'''
-        # print(ret_tokens)
-        # print(len(ret_list))
-        # print(next_hidden_states_0.shape)
-        # position = 0
-        # to_recover_total = next_hidden_states_0
-        # total_length = len(ret_list)
-        # '''finetune 20 tokens per 100 epoch'''
-        # while position + 20 < total_length:
-        #     txt_file.write("finetuning {} token\n".format(position+20))
-        #     to_recover_embedding = copy.deepcopy(to_recover_total[:, position+20:, :])
-        #     to_recover_embedding = to_recover_embedding.detach().requires_grad_(True)
-        #     print(to_recover_embedding.shape)
-        #     fixed_embedding = embed_layer(torch.tensor(ret_list[:position+20])).unsqueeze(0)
-        #     # print(fixed_embedding.shape)
-        #     # print(to_recover_embedding.shape)
-        #     # o=1/0
-        #     part_epoch = 100
-        #     lr = 0.1
-        #     for i in range(part_epoch):
-        #         with torch.no_grad():
-        #             to_recover_embedding = torch.clip(to_recover_embedding, -0.2, 0.2)
-        #         to_recover_embedding = to_recover_embedding.requires_grad_(True)
-        #         optim = torch.optim.SGD([to_recover_embedding], lr=lr)
-        #         new_input_embed_ = torch.cat((fixed_embedding, to_recover_embedding), dim=1)
-        #         '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
-        #         new_inputs = {'inputs_embeds': new_input_embed_, 'attention_mask': target_attention_mask} 
-        #         hidden_state_list = []
-        #         hook_handles = []
-        #         def forward_hook(module, input, output):
-        #             # print(output)
-        #             if isinstance(output, tuple):
-        #                 # print(output)
-        #                 for item in output:
-        #                     # print(item)
-        #                     hidden_state_list.append(item)
-        #             else:
-        #                 hidden_state_list.append(output)
-        
-        #         '''get hidden states from all layers'''
-        #         for name, module in model.named_modules():
-        #             # print(name, module)
-        #             if name == "model.layers.59":
-        #                 handle = module.register_forward_hook(forward_hook)
-        #                 hook_handles.append(handle)
-        #         # print("collect hidden states: {}".format(len(hook_handles)))
-        #         phi_relaxed = model(**new_inputs)
-        #         for handle in hook_handles:
-        #             handle.remove()
-        #         last_hidden_state = hidden_state_list[0]
-        #         hidden_state_list = []
-        #         # print(last_hidden_state)
+                '''add finetune stage'''
+                # print(ret_tokens)
+                # print(len(ret_list))
+                # print(next_hidden_states_0.shape)
+                # position = 0
+                # to_recover_total = next_hidden_states_0
+                # total_length = len(ret_list)
+                # '''finetune 20 tokens per 100 epoch'''
+                # while position + 20 < total_length:
+                #     txt_file.write("finetuning {} token\n".format(position+20))
+                #     to_recover_embedding = copy.deepcopy(to_recover_total[:, position+20:, :])
+                #     to_recover_embedding = to_recover_embedding.detach().requires_grad_(True)
+                #     print(to_recover_embedding.shape)
+                #     fixed_embedding = embed_layer(torch.tensor(ret_list[:position+20])).unsqueeze(0)
+                #     # print(fixed_embedding.shape)
+                #     # print(to_recover_embedding.shape)
+                #     # o=1/0
+                #     part_epoch = 100
+                #     lr = 0.1
+                #     for i in range(part_epoch):
+                #         with torch.no_grad():
+                #             to_recover_embedding = torch.clip(to_recover_embedding, -0.2, 0.2)
+                #         to_recover_embedding = to_recover_embedding.requires_grad_(True)
+                #         optim = torch.optim.SGD([to_recover_embedding], lr=lr)
+                #         new_input_embed_ = torch.cat((fixed_embedding, to_recover_embedding), dim=1)
+                #         '''then I need ||phi(relaxed(Z, T)) - phi(x*)||**2'''
+                #         new_inputs = {'inputs_embeds': new_input_embed_, 'attention_mask': target_attention_mask} 
+                #         hidden_state_list = []
+                #         hook_handles = []
+                #         def forward_hook(module, input, output):
+                #             # print(output)
+                #             if isinstance(output, tuple):
+                #                 # print(output)
+                #                 for item in output:
+                #                     # print(item)
+                #                     hidden_state_list.append(item)
+                #             else:
+                #                 hidden_state_list.append(output)
+                
+                #         '''get hidden states from all layers'''
+                #         for name, module in model.named_modules():
+                #             # print(name, module)
+                #             if name == "model.layers.59":
+                #                 handle = module.register_forward_hook(forward_hook)
+                #                 hook_handles.append(handle)
+                #         # print("collect hidden states: {}".format(len(hook_handles)))
+                #         phi_relaxed = model(**new_inputs)
+                #         for handle in hook_handles:
+                #             handle.remove()
+                #         last_hidden_state = hidden_state_list[0]
+                #         hidden_state_list = []
+                #         # print(last_hidden_state)
 
-        #         '''compute loss'''
-        #         next_hidden_states_last = next_hidden_states_last.to(last_hidden_state.device)
-        #         cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
-        #         optim.zero_grad()
+                #         '''compute loss'''
+                #         next_hidden_states_last = next_hidden_states_last.to(last_hidden_state.device)
+                #         cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
+                #         optim.zero_grad()
 
-        #         sum_cos_sim = cos_sim[0][position+20:].sum()
-        #         print("{} epoch, {} cos_sim".format(i, cos_sim[0][position+20:].mean().data))
-        #         txt_file.write("{} epoch, {} cos_sim\n".format(i, cos_sim[0][position+20:].mean().data))
-        #         (-sum_cos_sim).backward(inputs=[to_recover_embedding])
-        #         optim.step()
-        #     txt_file.write("position cos sim:{}\n".format(cos_sim.data))
-        #     acc, ret_tokens, ret_list = invert_embedding(torch.cat((fixed_embedding, to_recover_embedding), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
-        #     to_recover_total = torch.cat((fixed_embedding, to_recover_embedding), dim=1).data
-        #     position += 20
-        # txt_file.write("finetuned ret_list acc {}, token \n{}\n".format(acc, ret_tokens))
-        '''add finetune stage'''
+                #         sum_cos_sim = cos_sim[0][position+20:].sum()
+                #         print("{} epoch, {} cos_sim".format(i, cos_sim[0][position+20:].mean().data))
+                #         txt_file.write("{} epoch, {} cos_sim\n".format(i, cos_sim[0][position+20:].mean().data))
+                #         (-sum_cos_sim).backward(inputs=[to_recover_embedding])
+                #         optim.step()
+                #     txt_file.write("position cos sim:{}\n".format(cos_sim.data))
+                #     acc, ret_tokens, ret_list = invert_embedding(torch.cat((fixed_embedding, to_recover_embedding), dim=1), tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                #     to_recover_total = torch.cat((fixed_embedding, to_recover_embedding), dim=1).data
+                #     position += 20
+                # txt_file.write("finetuned ret_list acc {}, token \n{}\n".format(acc, ret_tokens))
+                '''add finetune stage'''
 
 
 
-        '''try replacing wrong token with correct one'''
-        # acc, ret_tokens, ret_list = invert_embedding(next_hidden_states_0, tokenizer, embed_layer, total_input_ids, invert_method='cosine')
-        # # get original discretized embedding
-        # last_hidden_state = forward_and_get_last_hidden_state(model, ret_list, total_attention_mask)
-        # # print(last_hidden_state)
-        # cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
-        # txt_file.write("original recovered token: {}\n".format(ret_tokens))
-        # txt_file.write("original cosine similarity: mean {}\n list: {}\n".format(cos_sim.mean(), cos_sim))
-        # for j, item in enumerate(ret_list):
-        #     if item != total_input_ids[0][j]:
-        #         txt_file.write("wrong token {}, trying to replace {} as {}\n".format(j, tokenizer.decode([item]), tokenizer.decode([total_input_ids[0][j]])))
-        #         tmp = item
-        #         ret_list[j] = total_input_ids[0][j]
-        #         txt_file.write("{}\n".format(ret_list))
-        #         last_hidden_state = forward_and_get_last_hidden_state(model, ret_list, total_attention_mask)
-        #         # print(last_hidden_state)
-        #         cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
-        #         txt_file.write("replaced cosine similarity: mean {}\n list: {}\n".format(cos_sim.mean(), cos_sim))
-        #         ret_list[j] = tmp
-        '''try replacing wrong token with correct one'''
-        acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, f=txt_file, invert_method='cosine')
-        txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
+                '''try replacing wrong token with correct one'''
+                # acc, ret_tokens, ret_list = invert_embedding(next_hidden_states_0, tokenizer, embed_layer, total_input_ids, invert_method='cosine')
+                # # get original discretized embedding
+                # last_hidden_state = forward_and_get_last_hidden_state(model, ret_list, total_attention_mask)
+                # # print(last_hidden_state)
+                # cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
+                # txt_file.write("original recovered token: {}\n".format(ret_tokens))
+                # txt_file.write("original cosine similarity: mean {}\n list: {}\n".format(cos_sim.mean(), cos_sim))
+                # for j, item in enumerate(ret_list):
+                #     if item != total_input_ids[0][j]:
+                #         txt_file.write("wrong token {}, trying to replace {} as {}\n".format(j, tokenizer.decode([item]), tokenizer.decode([total_input_ids[0][j]])))
+                #         tmp = item
+                #         ret_list[j] = total_input_ids[0][j]
+                #         txt_file.write("{}\n".format(ret_list))
+                #         last_hidden_state = forward_and_get_last_hidden_state(model, ret_list, total_attention_mask)
+                #         # print(last_hidden_state)
+                #         cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
+                #         txt_file.write("replaced cosine similarity: mean {}\n list: {}\n".format(cos_sim.mean(), cos_sim))
+                #         ret_list[j] = tmp
+                '''try replacing wrong token with correct one'''
+                acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), next_hidden_states_last, tokenizer, model, total_input_ids, f=txt_file, invert_method='cosine')
+                txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
 
     txt_file.close()
 
