@@ -15,8 +15,8 @@ from accelerate import Accelerator, dispatch_model, infer_auto_device_map
 
 
 # not only vicuna, I should try other version of llama
-def get_model(base_model_name = "baffo32/decapoda-research-llama-7B-hf",
-              lora_model_name = "/home/cc/zyg/my-medalpaca-lora-7b-16bit",
+def get_model(base_model_name = "daryl149/Llama-2-7b-chat-hf",
+              lora_model_name = "/home/cc/zyg/fingpt-forecaster_dow30_llama2-7b_lora",
               model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
@@ -40,7 +40,7 @@ def get_model(base_model_name = "baffo32/decapoda-research-llama-7B-hf",
     # lora_model.disable_adapters()
     # lora_model.unload()
 
-    lora_model.to("cuda:3")
+    lora_model.to("cuda:0")
     print("MODEL:\n", lora_model)
     lora_model.gradient_checkpointing = True
     print(lora_model.device)
@@ -237,7 +237,7 @@ def update_weight(weight: torch.Tensor, point, exponential, method="exponential"
     return weight
 
 
-def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:3']):
+def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:0']):
     if method == "exponential":
         weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
         weight_mask[:recover_length] = 1 / recover_length
@@ -513,6 +513,10 @@ def main():
     '''the original prompt we try to infer'''
     prompts = [
     "Clear cell tumors are part of the surface epithelial-stromal tumor group of Ovarian cancers,",
+    "The editorial stance of the Financial Times centres on economic liberalism, particularly advocacy of free trade and free markets. Since its founding, it has supported liberal democracy, favouring classically liberal politics and policies from international governments; its newsroom is independent from its editorial board, and it is considered a newspaper of record. Due to its history of economic commentary, the FT publishes a variety of financial indices, primarily the FTSE All-Share Index. Since the late 20th century, its typical depth of coverage has linked the paper with a white-collar, educated, and financially literate readership.",
+
+    "I flew to Heraklion and Aantorini from Athens in February. Seats are fine with decent leg room unfortunately there's no proper inflight entertainment on the flight. The service carried out by the cabin crew are professional and efficient. My return flight from Heraklion was delayed due to some technical difficulties. But we still managed to arrive in Athens on time. My flight to Santorini was short so they couldn't really carry out the full service but they still manage to give us cookies and fresheners.",
+    
     "Clear cell tumors are part of the surface epithelial-stromal tumor group of Ovarian cancers, accounting for 6% of these neoplastic cases. Clear cell tumors are also associated with the pancreas and salivary glands. Benign and borderline variants of this neoplasm are rare, and most cases are malignant. Typically, they are cystic neoplasms with polypoid masses that protrude into the cyst. On microscopic pathological examination, they are composed of cells with clear cytoplasm (that contains glycogen) and hob nail cells (from which the glycogen has been secreted). The pattern may be glandular, papillary or solid.",
     "Two Japanese scientists commenced research into inhibitors of HMG-CoA reductase in 1971 reasoning that organisms might produce such products as the enzyme is important in some essential cell wall components. This work lead to the identification of the first clinically useful compound lovastatin(mevinolin) from a mould in the mid 1970's. This agent was first used in the more severe forms of hypercholesteraemia in the 1980s followed by landmark trials with simvastatin that showed the potential for cardio-prevention. Cerivastatin was withdrawn in 2001 because of a ten times higher incidence of rhabdomyolysis than the other statins.",
     "Symptoms of vulvovaginitis caused by Candida species are indistinguishable and include the following: Pruritus is the most significant symptom Change in the amount and the color of vaginal discharge: It is characterized by a thick, white \"cottage cheese-like\" vaginal discharge Pain on urination (dysuria) Pain on sexual intercourse (dyspareunia) Vulvovaginal soreness Symptoms aggravate a week before the menses",
@@ -536,14 +540,14 @@ def main():
     '''load range file'''
     with open("range_llama7Bhf.pickle", 'rb') as f:
         left, right = pickle.load(f)
-        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to("cuda:3")
-        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to("cuda:3")
+        left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to("cuda:0")
+        right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to("cuda:0")
     # left_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # right_range = torch.ones(START_EMBED.shape[-1]) * 0.1
     # left_range, right_range = left_range.to(model.device), right_range.to(model.device)
 
     # prompts = prompts[1:]  #[:6]
-    prompts = prompts[0:1]
+    prompts = prompts[1:2]
     for prompt_ in prompts:
         tokenizer, model = get_model()
         
@@ -555,7 +559,7 @@ def main():
         embed_layer = model.model.get_input_embeddings()
         norm_layer = model.model.model.norm
         START_EMBED = embed_layer.weight[0].data
-        START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0).to("cuda:3")
+        START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0).to("cuda:0")
         START_EMBED.requires_grad_(False)
         print(START_EMBED)
 
@@ -585,67 +589,9 @@ def main():
         # outputs = model.generate(total_input_ids, attention_mask=total_attention_mask, max_new_tokens=1000)
         # print(outputs)
 
-        print("cos sim:", F.cosine_similarity(all_hidden_states_nolora[-1].type(torch.float32), all_hidden_states[-1].type(torch.float32), dim=-1))
-        print("L2: {}\n".format(torch.norm(all_hidden_states_nolora[-1].type(torch.float32) - all_hidden_states[-1].type(torch.float32), p=2, dim=-1).detach().cpu()))
+        txt_file.write("cos sim: {}\n".format(F.cosine_similarity(all_hidden_states_nolora[-1].type(torch.float32), all_hidden_states[-1].type(torch.float32), dim=-1)))
+        txt_file.write("L2: {}\n".format(torch.norm(all_hidden_states_nolora[-1].type(torch.float32) - all_hidden_states[-1].type(torch.float32), p=2, dim=-1).detach().cpu()))
         
-        # 20 layer ret:
-        # state last tensor([[[ 7.3096e-01,  4.4775e-01,  4.1089e-01,  ..., -2.7856e-01,
-        #   -3.5815e-01, -1.9531e-03],
-        #  [ 1.8691e+00,  1.8789e+00,  4.7168e-01,  ...,  9.0332e-01,
-        #    7.1094e-01,  7.9004e-01],
-        #  [ 6.8701e-01,  3.4453e+00,  5.2881e-01,  ...,  8.3984e-01,
-        #    1.9590e+00, -3.7598e-01],
-        #  ...,
-        #  [ 1.3975e+00,  4.8125e+00,  4.1187e-01,  ..., -7.0508e-01,
-        #    1.9746e+00, -7.5342e-01],
-        #  [-6.7871e-01,  3.0469e+00,  1.7822e+00,  ...,  1.1553e+00,
-        #    1.8457e+00,  5.2051e-01],
-        #  [-2.5708e-01,  1.0020e+00,  1.7493e-01,  ...,  1.0283e+00,
-        #   -9.7900e-01, -4.6631e-02]]], device='cuda:3', dtype=torch.float16)
-        # state last tensor([[[ 7.3145e-01,  4.4775e-01,  4.0991e-01,  ..., -2.7856e-01,
-        #   -3.5864e-01, -2.8076e-03],
-        #  [ 1.8662e+00,  1.8770e+00,  4.7485e-01,  ...,  9.0527e-01,
-        #    7.0996e-01,  7.8760e-01],
-        #  [ 6.8750e-01,  3.4355e+00,  5.2393e-01,  ...,  8.4033e-01,
-        #    1.9551e+00, -3.7769e-01],
-        #  ...,
-        #  [ 1.3975e+00,  4.8125e+00,  4.1162e-01,  ..., -7.0557e-01,
-        #    1.9746e+00, -7.5488e-01],
-        #  [-6.7773e-01,  3.0488e+00,  1.7842e+00,  ...,  1.1514e+00,
-        #    1.8428e+00,  5.1807e-01],
-        #  [-2.5830e-01,  1.0010e+00,  1.7224e-01,  ...,  1.0254e+00,
-        #   -9.7754e-01, -4.6631e-02]]], device='cuda:3', dtype=torch.float16)
-
-        # 30 layer ret
-        # state last tensor([[[-0.6133,  0.4341,  0.2893,  ...,  0.5020, -0.6797, -1.2461],
-        #  [ 3.1914, -0.5493,  0.8950,  ..., -0.9199,  1.0986,  1.3818],
-        #  [ 6.9180,  5.1758, -0.8125,  ..., -3.0059,  5.3984, -2.8164],
-        #  ...,
-        #  [ 7.3203,  8.0391, -1.5811,  ..., -0.5508,  4.7656,  0.1379],
-        #  [ 3.4219,  4.7539,  2.4629,  ..., -0.0537,  0.6553,  0.4189],
-        #  [ 3.8262,  0.5063, -0.1680,  ...,  2.3555,  0.1270,  0.6680]]],
-        # state last tensor([[[-0.6138,  0.4360,  0.2896,  ...,  0.5024, -0.6812, -1.2480],
-        #  [ 3.1855, -0.5562,  0.9053,  ..., -0.9072,  1.0986,  1.3809],
-        #  [ 6.9062,  5.1445, -0.8145,  ..., -3.0039,  5.3867, -2.8105],
-        #  ...,
-        #  [ 7.3125,  8.0312, -1.5840,  ..., -0.5547,  4.7617,  0.1350],
-        #  [ 3.4238,  4.7578,  2.4609,  ..., -0.0557,  0.6533,  0.4199],
-        #  [ 3.8203,  0.5015, -0.1689,  ...,  2.3555,  0.1348,  0.6802]]],
-
-        # state last tensor([[[ 2.0352, -1.2676,  1.1367,  ..., -0.2122, -2.5352, -1.9580],
-        #  [ 5.2188, -2.6230,  0.8550,  ..., -2.4238, -0.3276, -1.0439],
-        #  [ 9.1016,  3.7109, -0.7632,  ..., -3.7090,  5.5391, -1.9082],
-        #  ...,
-        #  [ 5.7070,  9.5469, -2.4316,  ...,  0.1704,  4.5039,  1.1367],
-        #  [ 1.9199,  3.4863,  1.7637,  ..., -0.3223,  0.3506,  2.5703],
-        #  [ 8.8750, -2.5234, -0.6567,  ...,  0.2402, -1.3496,  1.4609]]],
-        # state last tensor([[[ 2.0469, -1.2725,  1.1367,  ..., -0.2122, -2.5332, -1.9570],
-        #  [ 5.2188, -2.6133,  0.8457,  ..., -2.4355, -0.3315, -1.0439],
-        #  [ 9.1250,  3.7383, -0.7607,  ..., -3.7188,  5.5469, -1.9160],
-        #  ...,
-        #  [ 5.7188,  9.5469, -2.4336,  ...,  0.1719,  4.5078,  1.1387],
-        #  [ 1.9209,  3.4805,  1.7666,  ..., -0.3186,  0.3523,  2.5723],
-        #  [ 8.8984, -2.5254, -0.6543,  ...,  0.2344, -1.3691,  1.4414]]],
         
         # o=1/0
 
