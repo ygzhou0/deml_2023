@@ -15,8 +15,8 @@ from accelerate import Accelerator, dispatch_model, infer_auto_device_map
 
 
 # not only vicuna, I should try other version of llama
-def get_model(base_model_name = "daryl149/Llama-2-7b-chat-hf",
-              lora_model_name = "/home/cc/zyg/fingpt-forecaster_dow30_llama2-7b_lora",
+def get_model(base_model_name = "/home/cc/zyg/decapoda-research-llama-30b-hf",
+              lora_model_name = "/home/cc/zyg/medalpaca-lora-30b-8bit",
               model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
@@ -40,17 +40,34 @@ def get_model(base_model_name = "daryl149/Llama-2-7b-chat-hf",
     # lora_model.disable_adapters()
     # lora_model.unload()
 
-    lora_model.to("cuda:0")
+    device_map = {}
+    print(torch.cuda.device_count())
+    
+    model_layers = 32
+    if base_model_name.endswith("65b"):
+        model_layers = 80
+        # for i in range(model_layers - 20):
+        #     layer = "base_model.model.model.layers." + str(i)
+        #     device_map[layer] = int(i / (model_layers - 20) * 4)
+        # for i in range(model_layers - 20, model_layers):
+        #     layer = "base_model.model.model.layers." + str(i)
+        #     device_map[layer] = 'cpu'
+    elif base_model_name.endswith("30b") or base_model_name.endswith("30b-hf"):
+        model_layers = 60
+    for i in range(model_layers):
+        layer = "base_model.model.model.layers." + str(i)
+        device_map[layer] = int(i / (model_layers) * 4)
+    device_map["base_model.model.model.embed_tokens"] = 0
+    device_map["base_model.model.model.norm"] = 3
+    device_map["base_model.model.lm_head"] = 3
+    
+    print(device_map)
+    lora_model = dispatch_model(lora_model, device_map=device_map)
+
+
     print("MODEL:\n", lora_model)
     lora_model.gradient_checkpointing = True
     print(lora_model.device)
-    # o=1/0
-    # with open("adapter_config.json") as f:
-    #     adapter_config = json.load(f)
-    # lora_config = LoraConfig(**adapter_config)
-    # print(lora_config)
-    # model = get_peft_model(base_model, lora_config)
-    # print(model)
     # o=1/0
     return tokenizer, lora_model
 
@@ -90,7 +107,7 @@ def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_att
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 30:
+                    elif int(name[30:]) <= 55:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -113,7 +130,7 @@ def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_att
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 30:
+                    elif int(name[30:]) <= 55:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -171,7 +188,7 @@ def get_hidden_state_base(tokenizer, model, prompt=None, input_embed=None, targe
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 30:
+                    elif int(name[30:]) <= 55:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -196,7 +213,7 @@ def get_hidden_state_base(tokenizer, model, prompt=None, input_embed=None, targe
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 30:
+                    elif int(name[30:]) <= 55:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -337,7 +354,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=No
     return acc, ret_tokens, ret_list
 
 
-def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_layer="base_model.model.model.layers.30"):
+def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_layer="base_model.model.model.layers.55"):
     # embed_layer = model.model.get_input_embeddings()
     # ori_input_embed = embed_layer(torch.tensor(input_ids))
     # new_inputs = {'inputs_embeds': torch.tensor(input_ids).unsqueeze(0), 'attention_mask': attention_mask} 
@@ -468,7 +485,7 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
     return acc, ret_tokens, ret_list
 
 
-def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="base_model.model.model.layers.30"):
+def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="base_model.model.model.layers.55"):
     hidden_state_list = []
     hook_handles = []
     if isinstance(input_ids, torch.Tensor):
@@ -538,7 +555,7 @@ def main():
     ]
 
     '''load range file'''
-    with open("range_llama7Bhf.pickle", 'rb') as f:
+    with open("range_llama30B.pickle", 'rb') as f:
         left, right = pickle.load(f)
         left_range = torch.FloatTensor(left[0][-1]).type(torch.float16).to("cuda:0")
         right_range = torch.FloatTensor(right[0][-1]).type(torch.float16).to("cuda:0")
@@ -614,7 +631,7 @@ def main():
         '''define loss func'''
         loss_func = torch.nn.MSELoss(reduction='mean')
         for lr in [0.1]:#[0.05 * len(target_input_ids[0])]: #[1000]: # [1000, 5000, 10000]:
-            total_epoch = 2000
+            total_epoch = 3000
             for alpha in [1e-3]: #[0, 2e-4, 3e-4, 5e-4, 6e-4, 7e-4, 1e-3, 2e-3]:
                 # if alpha > 0:
                 #     lr *= 0.1
@@ -662,8 +679,8 @@ def main():
 
                 for i in range(part_epoch):
                     with torch.no_grad():
-                        # new_input_embed_0 = torch.clip(new_input_embed_0, -0.17, 0.17)
-                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.06, 0.06)
+                        new_input_embed_0 = torch.clip(new_input_embed_0, -0.17, 0.17)
+                        # new_input_embed_0 = torch.clip(new_input_embed_0, -0.06, 0.06)
                     new_input_embed_0 = new_input_embed_0.requires_grad_(True)
                     optim = torch.optim.SGD([new_input_embed_0], lr=lr)
                     # txt_file.write("learning rate: {}".format(optim.param_groups[0]["lr"]))
@@ -688,7 +705,7 @@ def main():
                     '''get hidden states from all layers'''
                     for name, module in model.named_modules():
                         # print(name, module)
-                        if name == "base_model.model.model.layers.30":
+                        if name == "base_model.model.model.layers.55":
                             handle = module.register_forward_hook(forward_hook)
                             hook_handles.append(handle)
                     # print("collect hidden states: {}".format(len(hook_handles)))
