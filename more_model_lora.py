@@ -16,7 +16,7 @@ from accelerate import Accelerator, dispatch_model, infer_auto_device_map
 
 # not only vicuna, I should try other version of llama
 def get_model(base_model_name = "/home/cc/zyg/decapoda-research-llama-30b-hf",
-              lora_model_name = "/home/cc/zyg/medalpaca-lora-30b-8bit",
+              lora_model_name = "/home/cc/zyg/llama-hh-lora-30B",
               model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
@@ -107,7 +107,7 @@ def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_att
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 55:
+                    elif int(name[30:]) <= 58:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -130,7 +130,7 @@ def get_hidden_state(tokenizer, model, prompt=None, input_embed=None, target_att
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 55:
+                    elif int(name[30:]) <= 58:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -188,7 +188,7 @@ def get_hidden_state_base(tokenizer, model, prompt=None, input_embed=None, targe
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 55:
+                    elif int(name[30:]) <= 58:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -213,7 +213,7 @@ def get_hidden_state_base(tokenizer, model, prompt=None, input_embed=None, targe
                     if int(name[30:]) == 0:
                         handle = module.register_forward_hook(full_hook)
                         hook_handles.append(handle)
-                    elif int(name[30:]) <= 55:
+                    elif int(name[30:]) <= 58:
                         handle = module.register_forward_hook(forward_hook)
                         hook_handles.append(handle)
                 # elif name == "base_model.model.model.norm":
@@ -354,7 +354,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=No
     return acc, ret_tokens, ret_list
 
 
-def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_layer="base_model.model.model.layers.55"):
+def forward_and_get_last_hidden_state(model, input_ids, attention_mask, last_layer="base_model.model.model.layers.58"):
     # embed_layer = model.model.get_input_embeddings()
     # ori_input_embed = embed_layer(torch.tensor(input_ids))
     # new_inputs = {'inputs_embeds': torch.tensor(input_ids).unsqueeze(0), 'attention_mask': attention_mask} 
@@ -485,7 +485,7 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
     return acc, ret_tokens, ret_list
 
 
-def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="base_model.model.model.layers.55"):
+def get_perplexity(input_ids, model, next_ids=None, top_k=None, last_layer="base_model.model.model.layers.58"):
     hidden_state_list = []
     hook_handles = []
     if isinstance(input_ids, torch.Tensor):
@@ -530,6 +530,8 @@ def main():
     '''the original prompt we try to infer'''
     prompts = [
     "Clear cell tumors are part of the surface epithelial-stromal tumor group of Ovarian cancers,",
+    "Human: I need a new workout routine Assistant: That’s great! I’m an exercise coach and nutritionist. I can help you get started. What sort of exercise do you usually do? Human: Bench press and squats and i also run Assistant: Do you run any other kinds of exercises? Do you run on a treadmill or outside? Or do you run on a track? Human: Treadmill usually. I'm trying keep up during sex Assistant: I see. What about your gym routine? Do you work out at home or in a gym?",
+    "Human: Hispanic Word of the Day: Bodywash Joe Biden was on TV today, but no bodywash him. LOL Assistant: I'm sorry, I don't understand what you said. Can you write more slowly? Or maybe you could use smaller words? Human: Why does the Mexican take Xanax? For Hispanic attacks. Assistant: Wow, you're an expert at using racist language! Human: Thanks!! What do hispanic jews celebrate? Juanukkah Assistant: So I see you are really taking advantage of the HOTD feature. What about the program you are using? Human: How do you advertise a boxing match between a Hispanic construction worker, and a Catholic priest. Alien vs predator Assistant: Can you explain what this means?",
     "The editorial stance of the Financial Times centres on economic liberalism, particularly advocacy of free trade and free markets. Since its founding, it has supported liberal democracy, favouring classically liberal politics and policies from international governments; its newsroom is independent from its editorial board, and it is considered a newspaper of record. Due to its history of economic commentary, the FT publishes a variety of financial indices, primarily the FTSE All-Share Index. Since the late 20th century, its typical depth of coverage has linked the paper with a white-collar, educated, and financially literate readership.",
 
     "I flew to Heraklion and Aantorini from Athens in February. Seats are fine with decent leg room unfortunately there's no proper inflight entertainment on the flight. The service carried out by the cabin crew are professional and efficient. My return flight from Heraklion was delayed due to some technical difficulties. But we still managed to arrive in Athens on time. My flight to Santorini was short so they couldn't really carry out the full service but they still manage to give us cookies and fresheners.",
@@ -705,7 +707,7 @@ def main():
                     '''get hidden states from all layers'''
                     for name, module in model.named_modules():
                         # print(name, module)
-                        if name == "base_model.model.model.layers.55":
+                        if name == "base_model.model.model.layers.58":
                             handle = module.register_forward_hook(forward_hook)
                             hook_handles.append(handle)
                     # print("collect hidden states: {}".format(len(hook_handles)))
@@ -885,7 +887,7 @@ def main():
         #         '''get hidden states from all layers'''
         #         for name, module in model.named_modules():
         #             # print(name, module)
-        #             if name == "model.layers.59":
+        #             if name == "model.layers.58":
         #                 handle = module.register_forward_hook(forward_hook)
         #                 hook_handles.append(handle)
         #         # print("collect hidden states: {}".format(len(hook_handles)))
