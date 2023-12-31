@@ -1,0 +1,764 @@
+import argparse
+import torch
+import os
+import re
+import sys
+import time
+import pickle
+import copy
+import json
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import numpy as np
+from peft import PeftModel, LoraConfig, get_peft_model
+from transformers import (AutoModelForCausalLM, AutoTokenizer, top_k_top_p_filtering)
+from accelerate import Accelerator, dispatch_model
+
+
+# not only vicuna, I should try other version of llama
+def get_model(base_model_name = "/home/cc/zyg/decapoda-research-llama-30b-hf",
+              lora_model_name = "/home/cc/zyg/llama-hh-lora-30B",
+              model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+        **model_kwargs
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model_name,
+        trust_remote_code=True,
+        use_fast=False
+    )
+    if not tokenizer.pad_token:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = 'left'
+    device_map = {}
+    model_layers = len(base_model.model.layers)
+    if lora_model_name is None:
+        for i in range(model_layers):
+            layer = "model.layers." + str(i)
+            device_map[layer] = int(i / (model_layers) * torch.cuda.device_count())
+        device_map["model.embed_tokens"] = 0
+        device_map["model.norm"] = torch.cuda.device_count() - 1
+        device_map["lm_head"] = torch.cuda.device_count() - 1
+        model = dispatch_model(base_model, device_map=device_map)
+    else:
+        for i in range(model_layers):
+            layer = "base_model.model.model.layers." + str(i)
+            device_map[layer] = int(i / (model_layers) * torch.cuda.device_count())
+        device_map["base_model.model.model.embed_tokens"] = 0
+        device_map["base_model.model.model.norm"] = torch.cuda.device_count() - 1
+        device_map["base_model.model.lm_head"] = torch.cuda.device_count() - 1
+        lora_model = PeftModel.from_pretrained(base_model, lora_model_name, torch_dtype=torch.float16)
+        model = dispatch_model(lora_model, device_map=device_map)
+    model.gradient_checkpointing = True
+    return tokenizer, model
+
+
+def get_hidden_state(tokenizer, model, layer_id, prompt=None, input_embed=None, target_attention_mask=None):
+    assert(prompt != None or input_embed != None)
+    hidden_state_list = []
+    hook_handles = []
+    def forward_hook(module, input, output):
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+    def full_hook(module, input, output):
+        '''full hook'''
+        if isinstance(input, tuple):
+            hidden_state_list.append(input[0])
+        else:
+            hidden_state_list.append(input)
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+    if prompt != None:
+        with torch.no_grad():
+            target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
+            target_input_ids = target_token['input_ids'].to(model.device)
+            target_attention_mask = target_token['attention_mask'].to(model.device)
+            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
+            
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                if len(name) > 0 and name[-1].isdigit():
+                    if not name[-2].isdigit() and int(name[-1]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    elif not name[-2].isdigit() and int(name[-1]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    elif name[-2].isdigit() and int(name[-2:]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    # elif name.endswith("model.norm"):
+                    #     handle = module.register_forward_hook(forward_hook)
+                    #     hook_handles.append(handle)
+
+            next_ = model(**inputs)
+            embed_layer = model.model.get_input_embeddings()
+            ori_input_embed = embed_layer(target_input_ids)
+
+    elif input_embed != None:
+        with torch.no_grad():
+            input_embed.to(model.device)
+            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask}
+
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                if name[-1].isdigit():
+                    if not name[-2].isdigit() and int(name[-1]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    elif not name[-2].isdigit() and int(name[-1]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    elif name[-2].isdigit() and int(name[-2:]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    # elif name.endswith("model.norm"):
+                    #     handle = module.register_forward_hook(forward_hook)
+                    #     hook_handles.append(handle)
+
+            next_ = model(**new_inputs)
+            ori_input_embed = input_embed
+            target_input_ids = None
+    else:    
+        raise NotImplementedError
+    for handle in hook_handles:
+        handle.remove()
+    return target_input_ids, target_attention_mask, ori_input_embed, hidden_state_list
+
+
+def get_sorted_top_k(array, top_k=1, axis=-1, reverse=False):
+
+    if reverse:
+        axis_length = array.shape[axis]
+        partition_index = np.take(np.argpartition(array, kth=-top_k, axis=axis),
+                                  range(axis_length - top_k, axis_length), axis)
+    else:
+        partition_index = np.take(np.argpartition(array, kth=top_k, axis=axis), range(0, top_k), axis)
+    top_scores = np.take_along_axis(array, partition_index, axis)
+    sorted_index = np.argsort(top_scores, axis=axis)
+    if reverse:
+        sorted_index = np.flip(sorted_index, axis=axis)
+    top_sorted_scores = np.take_along_axis(top_scores, sorted_index, axis)
+    top_sorted_indexes = np.take_along_axis(partition_index, sorted_index, axis)
+    return top_sorted_scores, top_sorted_indexes
+
+
+def get_hidden_state_base(tokenizer, model, layer_id, prompt=None, input_embed=None, target_attention_mask=None):
+    assert(prompt != None or input_embed != None)
+    hidden_state_list = []
+    hook_handles = []
+    def forward_hook(module, input, output):
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+    def full_hook(module, input, output):
+        if isinstance(input, tuple):
+            hidden_state_list.append(input[0])
+        else:
+            hidden_state_list.append(input)
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+    if prompt != None:
+        with torch.no_grad():
+            target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
+            target_input_ids = target_token['input_ids'].to(model.device)
+            target_attention_mask = target_token['attention_mask'].to(model.device)
+            inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
+            
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                if name[-1].isdigit():
+                    if not name[-2].isdigit() and int(name[-1]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    elif not name[-2].isdigit() and int(name[-1]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    elif name[-2].isdigit() and int(name[-2:]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    # elif name.endswith("model.norm"):
+                    #     handle = module.register_forward_hook(forward_hook)
+                    #     hook_handles.append(handle)
+
+            next_ = model(**inputs)
+            embed_layer = model.model.get_input_embeddings()
+            ori_input_embed = embed_layer(target_input_ids)
+
+    elif input_embed != None:
+        with torch.no_grad():
+            input_embed.to(model.device)
+            new_inputs = {'inputs_embeds': input_embed, 'attention_mask': target_attention_mask} 
+            
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                if name[-1].isdigit():
+                    if not name[-2].isdigit() and int(name[-1]) == 0:
+                        handle = module.register_forward_hook(full_hook)
+                        hook_handles.append(handle)
+                    elif not name[-2].isdigit() and int(name[-1]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    elif name[-2].isdigit() and int(name[-2:]) <= layer_id:
+                        handle = module.register_forward_hook(forward_hook)
+                        hook_handles.append(handle)
+                    # elif name.endswith("model.norm"):
+                    #     handle = module.register_forward_hook(forward_hook)
+                    #     hook_handles.append(handle)
+
+            next_ = model(**new_inputs)
+            ori_input_embed = input_embed
+            target_input_ids = None
+    else:    
+        raise NotImplementedError
+    for handle in hook_handles:
+        handle.remove()
+    return target_input_ids, target_attention_mask, ori_input_embed, hidden_state_list
+
+
+def update_weight(weight: torch.Tensor, point, exponential, method="exponential"):
+    assert len(weight.shape) == 1
+    if method == "exponential":
+        if weight[0] >= weight[point]:
+            '''total sum = 1, lr is adjusted according to text length'''
+            weight[:point] = weight[:point] * exponential
+            total_value = weight.sum()
+            weight[point:] += (1 - total_value) / (len(weight) - point)
+    elif method == "linear":
+        if weight[0] >= weight[point]:
+            '''weight on each token is 1'''
+            weight[point:] += exponential
+    else:
+        raise NotImplementedError
+            
+    return weight
+
+
+def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:0']):
+    if method == "exponential":
+        weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
+        weight_mask[:recover_length] = 1 / recover_length
+        weight_mask = weight_mask.to(devices[0])
+    elif method == "linear":
+        weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
+        weight_mask[:recover_length] = 1.0
+        weight_mask = weight_mask.to(devices[0])
+    elif method == "none":
+        weight_mask = torch.ones(len_cut_output + recover_length).type(torch.float16) / (len_cut_output + recover_length)
+        weight_mask = weight_mask.to(devices[0])
+    else: 
+        raise NotImplementedError
+    return weight_mask
+
+
+def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=None, invert_method='cosine', show_position=False, filter_nonascii=True, top_k=10):
+    if f != None:
+        sys.stdout = f
+    if len(hidden_state.shape) >= 3:
+        new_input_embed_squeeze = hidden_state.squeeze(0)
+    else:
+        new_input_embed_squeeze = hidden_state
+
+    ret_list = []
+    for embed in new_input_embed_squeeze:
+        if invert_method == 'L2':
+            '''show by L2 distance'''
+            dist_ret = -torch.norm(embed_layer.weight - embed, p=2, dim=1)
+        elif invert_method == 'cosine':
+            '''show by cosine similarity'''
+            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
+        else:
+            raise NotImplementedError
+        idx = 0
+        if filter_nonascii:
+            p = torch.topk(dist_ret, top_k).indices[idx]
+            while not tokenizer.decode([p]).isascii() or p == 0 or p == 2:
+                idx += 1
+                if idx == top_k:
+                    idx = 0
+                    print("fail to filter non ascii"); break
+                p = torch.topk(dist_ret, top_k).indices[idx]
+        ret_list.append(torch.topk(dist_ret, top_k).indices[idx])
+        
+    '''show position accuracy'''
+    acc_cnt,acc_10t_cnt,acc_20t_cnt,acc_30t_cnt,acc_40t_cnt = [0]*5
+    prompt_length = len(total_input_ids[0])
+    for j in range(prompt_length):
+        if total_input_ids[0][j] == ret_list[j]:
+            acc_cnt += 1
+            if j <= 10:
+                acc_10t_cnt += 1
+            if j <= 20:
+                acc_20t_cnt += 1
+            if j <= 30:
+                acc_30t_cnt += 1
+            if j <= 40:
+                acc_40t_cnt += 1
+    acc = acc_cnt / (len(ret_list))
+    print("acc: ", acc)
+    if show_position:
+        print("acc 10 {}, acc 20 {}, acc 30 {}, acc 40 {}".format(acc_10t_cnt,acc_20t_cnt,acc_30t_cnt,acc_40t_cnt))
+    ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
+    if f != None:
+        sys.stdout = sys.__stdout__
+    return acc, ret_tokens, ret_list
+
+
+def forward_and_get_last_hidden_state(model, input_ids, attention_mask, layer_id):
+    new_inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': attention_mask} 
+
+    hidden_state_list = []
+    hook_handles = []
+    def forward_hook(module, input, output):
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+
+    for name, module in model.named_modules():
+        if len(name) > 1 and name[-2:] == str(layer_id):
+            handle = module.register_forward_hook(forward_hook)
+            hook_handles.append(handle)
+    phi_relaxed = model(**new_inputs)
+    for handle in hook_handles:
+        handle.remove()
+    last_hidden_state = hidden_state_list[0]
+    return last_hidden_state
+
+
+def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_input_ids, layer_id, f=None, invert_method='cosine', filter_nonascii=True, top_k=10):
+    if f != None:
+        sys.stdout = f
+    embed_layer = model.model.get_input_embeddings()
+    if len(hidden_state.shape) >= 3:
+        new_input_embed_squeeze = hidden_state.squeeze(0)
+    else:
+        new_input_embed_squeeze = hidden_state
+
+    ret_list = []
+    ret_top_k = []
+    for embed in new_input_embed_squeeze:
+        if invert_method == 'L2':
+            '''show by L2 distance'''
+            dist_ret = -torch.norm(embed_layer.weight - embed, p=2, dim=1)
+        elif invert_method == 'cosine':
+            '''show by cosine similarity'''
+            dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
+        else:
+            raise NotImplementedError
+        ret_top_k.append(torch.topk(dist_ret, top_k).indices.tolist())
+        idx = 0
+        if filter_nonascii:
+            p = torch.topk(dist_ret, top_k).indices[idx]
+            while not tokenizer.decode([p]).isascii() or p == 0 or p == 2:
+                idx += 1
+                if idx == top_k:
+                    idx = 0
+                    print("fail to filter non ascii"); break
+                p = torch.topk(dist_ret, top_k).indices[idx]
+        ret_list.append(int(torch.topk(dist_ret, top_k).indices[idx].data.cpu()))
+
+    print("......start replacing......")
+    for i, top_list in enumerate(ret_top_k):
+        cos_sim_list = []
+        
+        '''method 1: add up cosine and perplexity'''
+        # score = torch.zeros(32000)
+        # for j, cos_sim_value in enumerate(cos_sim_list):
+        #     score[top_list[j]] += cos_sim_value
+        # print("top cosine position:", torch.topk(score, 10))
+        # '''add perplexity metric'''
+        # if i > 0:
+        #     input_ids = copy.deepcopy(ret_list[:i])
+        #     perplexity, topk_ids = get_perplexity(input_ids, model, top_k=10)
+        #     print("top perplexity position:", perplexity, topk_ids)
+        #     for j, token_id in enumerate(topk_ids):
+        #         score[token_id] += 0.8 * perplexity[j]
+        # idx = np.argmax(cos_sim_list)
+        # print("top score position:", torch.topk(score, 10))
+        # idx = np.argmax(score)
+
+        '''method2: combine top cosine and top perplexity, use 60 layer as criteria'''
+        if i > 0:
+            input_ids = copy.deepcopy(ret_list[:i])
+            perplexity, topk_ids = get_perplexity(input_ids, model, layer_id=layer_id, top_k=top_k)
+            top_list += topk_ids.tolist()
+        for item in top_list:
+            if filter_nonascii and (not tokenizer.decode([item]).isascii() or item == 0 or item == 2):
+                cos_sim_list.append(0)
+                continue
+            replaced_ret_list = copy.deepcopy(ret_list)
+            replaced_ret_list[i] = item
+            new_hidden_state = forward_and_get_last_hidden_state(model, replaced_ret_list, None, layer_id=layer_id)
+            gt_hidden_state = gt_hidden_state.to(new_hidden_state.device)
+            cos_sim = F.cosine_similarity(new_hidden_state.type(torch.float32), gt_hidden_state.type(torch.float32), dim=-1)
+            cos_sim_list.append(cos_sim[0][i].data.cpu())
+        idx = np.argmax(cos_sim_list)
+        ret_list[i] = top_list[idx]
+
+    print("......calculating accuracy......")
+    '''show accuracy'''
+    acc_cnt = 0
+    prompt_length = len(total_input_ids[0])
+    for j in range(prompt_length):
+        if total_input_ids[0][j] == ret_list[j]:
+            acc_cnt += 1
+    acc = acc_cnt / (len(ret_list))
+    print("acc: ", acc)
+    ret_tokens = tokenizer.decode(torch.tensor(ret_list[1:]))
+    if f != None:
+        sys.stdout = sys.__stdout__
+    return acc, ret_tokens, ret_list
+
+
+def get_perplexity(input_ids, model, layer_id, next_ids=None, top_k=None):
+    hidden_state_list = []
+    hook_handles = []
+    if isinstance(input_ids, torch.Tensor):
+        inputs = {'input_ids': input_ids.to(model.device), 'attention_mask': None}
+    else:
+        inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': None}
+    def forward_hook(module, input, output):
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+
+    for name, module in model.named_modules():
+        if len(name) > 1 and name[-2:] == str(layer_id):
+            handle = module.register_forward_hook(forward_hook)
+            hook_handles.append(handle)
+    next_token_logits = model(**inputs).logits[:, -1, :]
+    filtered_next_token_logits = top_k_top_p_filtering(next_token_logits, top_k=50, top_p=1.0)
+    probs = F.softmax(filtered_next_token_logits, dim=-1)
+    for handle in hook_handles:
+        handle.remove()
+    if next_ids != None:
+        perplexity = probs[0][next_ids]
+        top_ids = next_ids
+    elif top_k != None:
+        top_ids = torch.topk(probs[0], top_k).indices
+        perplexity = probs[0][top_ids]
+    else:
+        raise NotImplementedError
+    return perplexity, top_ids
+
+
+def main(args):
+    '''create log file'''
+    lora_setting = "with_lora" if args.lora_model_name is not None else "no_lora"
+    txt_file = open("{}-{}-{}-{}-{}-{}-{}-{}.log".format(lora_setting, *time.localtime()), "w")
+    np.random.seed(args.seed)
+
+    '''get model'''
+    tokenizer, model = get_model(base_model_name=args.base_model_name, lora_model_name=args.lora_model_name)
+
+    '''freeze model parameter'''
+    for param in model.parameters():
+        param.requires_grad = False
+
+    '''fix <start> token'''
+    embed_layer = model.model.get_input_embeddings()
+    START_EMBED = embed_layer.weight[0].data
+    START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0)
+    START_EMBED.requires_grad_(False)
+
+    '''load prompts'''
+    if not os.path.exists(args.dataset_path):
+        txt_file.write("{} dataset does not exist!!".format(args.dataset_path))
+        raise FileNotFoundError
+    f = open(args.dataset_path, 'r')
+    prompts = json.load(f)
+    f.close()
+
+    '''get range'''
+    embed_matrix = np.array(embed_layer.weight.data.cpu())
+    left_range = get_sorted_top_k(embed_matrix, top_k=10, axis=0, reverse=False)
+    left_range = torch.FloatTensor(left_range[0][-1]).type(torch.float16).to(model.device)
+    right_range = get_sorted_top_k(embed_matrix, top_k=10, axis=0, reverse=True)
+    right_range = torch.FloatTensor(right_range[0][-1]).type(torch.float16).to(model.device)
+
+    input_ids_list = []
+    attention_mask_list = []
+    all_hidden_states_list = []
+    for prompt_ in prompts:
+        '''get all hidden states in a list'''
+        total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
+                    model, layer_id=args.num_invert_layers, prompt=prompt_)
+        txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states)))
+        input_ids_list.append(total_input_ids)
+        attention_mask_list.append(total_attention_mask)
+        all_hidden_states_list.append(all_hidden_states)
+
+    if args.lora_model_name is not None:
+        '''disable lora'''
+        # model = model.merge_and_unload(progressbar=True)
+        # model.unmerge_adapter()
+        # model.merge_adapter()
+        model.unload()
+
+    for i, prompt in enumerate(prompts):
+        txt_file.write("recovering {}\n".format(prompt))
+        total_input_ids, total_attention_mask, all_hidden_states = input_ids_list[i], attention_mask_list[i], all_hidden_states_list[i]
+
+        if args.lora_model_name is not None:
+            total_input_ids_nolora, total_attention_mask_nolora, _, all_hidden_states_nolora = get_hidden_state_base(tokenizer, 
+                        model, layer_id=args.num_invert_layers, prompt=prompt)
+            txt_file.write("collected hidden states: {} \n".format(len(all_hidden_states_nolora)))
+            txt_file.write("cos sim: {}\n".format(F.cosine_similarity(all_hidden_states_nolora[-1].type(torch.float32), all_hidden_states[-1].type(torch.float32), dim=-1)))
+            txt_file.write("L2: {}\n".format(torch.norm(all_hidden_states_nolora[-1].type(torch.float32) - all_hidden_states[-1].type(torch.float32), p=2, dim=-1).detach().cpu()))
+
+        prompt_length = len(total_input_ids[0])
+        recover_length = prompt_length
+        target_input_ids = total_input_ids
+        target_attention_mask = total_attention_mask
+        next_hidden_states_last = all_hidden_states[-1].detach().requires_grad_(False)
+        txt_file.write("recovering piece length: {}\n".format(prompt_length))
+
+        '''define hyper-params'''
+        loss_func = torch.nn.MSELoss(reduction='mean')
+        lr = args.lr
+        total_epoch = args.epoch
+        alpha = args.alpha
+        
+        '''init input embed'''
+        size = (len(target_input_ids[0]) - 1, START_EMBED.shape[-1])
+        if args.init_method == "gaussian":
+            means = torch.zeros(size)
+            new_input_embed_0 = torch.normal(mean=means, std=args.init_param)
+            new_input_embed_0 = new_input_embed_0.unsqueeze(0).type(torch.float16)
+        elif args.init_method == "uniform":
+            new_input_embed_np = np.random.uniform(low=-args.init_param, high=args.init_param, size=size)
+            new_input_embed_0 = torch.FloatTensor(new_input_embed_np)
+        else:
+            raise NotImplementedError
+            
+        new_input_embed_0 = new_input_embed_0.unsqueeze(dim=0).type(torch.float16).to(model.device)
+        new_input_embed_0.requires_grad_(True)
+
+        epochs = []
+        loss_lst = []
+        cos_sim_lst = []
+
+        '''weighted average loss'''
+        weight_mask = init_weight_mask(0, recover_length, method="linear", devices=[model.device])
+        part_epoch = total_epoch
+        
+        '''start timer'''
+        start = time.time()
+
+        for i in range(part_epoch):
+            '''clip embedding'''
+            with torch.no_grad():
+                clip_range = 0.2
+                if "7b" in args.base_model_name:
+                    clip_range = 0.06
+                elif "30b" in args.base_model_name:
+                    clip_range = 0.17
+                new_input_embed_0 = torch.clip(new_input_embed_0, -clip_range, clip_range)
+            new_input_embed_0 = new_input_embed_0.requires_grad_(True)
+            optim = torch.optim.SGD([new_input_embed_0], lr=lr)
+
+            '''add start token'''
+            new_input_embed_ = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+
+            '''||phi(relaxed(Z, T)) - phi(x*)||**2'''
+            new_inputs = {'inputs_embeds': new_input_embed_, 'attention_mask': target_attention_mask} 
+
+            hidden_state_list = []
+            hook_handles = []
+            def forward_hook(module, input, output):
+                if isinstance(output, tuple):
+                    for item in output:
+                        hidden_state_list.append(item)
+                else:
+                    hidden_state_list.append(output)
+    
+            '''get hidden states from all layers'''
+            for name, module in model.named_modules():
+                if len(name) > 1 and name[-2:] == str(args.num_invert_layers):
+                    handle = module.register_forward_hook(forward_hook)
+                    hook_handles.append(handle)
+            phi_relaxed = model(**new_inputs)
+            for handle in hook_handles:
+                handle.remove()
+            last_hidden_state = hidden_state_list[0]
+            hidden_state_list = []
+
+            '''compute mse loss'''
+            next_hidden_states_last = next_hidden_states_last.to(last_hidden_state.device)
+            loss_mse = loss_func(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32))
+            # print("{} epoch, {} loss".format(i, loss_mse.data))
+
+            '''compute similarity'''
+            cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
+
+            '''backward'''
+            optim.zero_grad()
+            cos_sim = cos_sim.to(model.device)
+            sum_cos_sim = ((-cos_sim) * weight_mask).sum()
+
+            relu_loss = F.relu(torch.abs(new_input_embed_) - right_range).sum()
+            loss = sum_cos_sim + alpha * relu_loss 
+            if args.optim_method == "MSELoss":
+                loss_mse.backward(inputs=[new_input_embed_0])    # optimize by MSELoss
+            elif args.optim_method == "cosine":
+                loss.backward(inputs=[new_input_embed_0])  # optimize by cosine sim
+            
+            if torch.any(torch.isnan(cos_sim)):
+                txt_file.write("encounter NAN\n")
+                break
+            optim.step()
+            epochs.append(i)                              # for loss graph
+            loss_lst.append(relu_loss.data.cpu())         # for loss graph
+            cos_sim_lst.append(sum_cos_sim.data.cpu())    # for loss graph
+            torch.cuda.empty_cache()
+
+            if (i+1) % 25 == 0 or i == part_epoch - 1:
+                txt_file.write("{} epoch, cos sim: {}\n".format(i, cos_sim.mean().data))
+                txt_file.write("relu loss: {}\n".format(relu_loss.data))
+                txt_file.write("total loss: {}\n".format(loss))
+
+            if (i+1) % 100 == 0 or i == part_epoch - 1:
+                end = time.time()
+                acc, ret_tokens, ret_list = invert_embedding(torch.cat((START_EMBED, new_input_embed_0), dim=1), 
+                                                            tokenizer, 
+                                                            embed_layer, 
+                                                            total_input_ids, 
+                                                            invert_method=args.invert_method,
+                                                            filter_nonascii=args.filter_nonascii)
+                txt_file.write("0 layer hidden state ret: lr{}, epoch{}, acc{}, cos sim{}, final loss{}, time {}s, alpha {}, result token: \n{}\n".format(lr, i, acc, cos_sim.mean(), relu_loss, end-start, alpha, ret_tokens))
+                
+                if args.show_low_confidence:
+                    txt_file.write("target layer cos sim: {}\n".format(cos_sim))
+                    for sim_index, sim in enumerate(cos_sim[0]):
+                        if sim <= 0.95:
+                            txt_file.write("low confidence place {}, predicted {}, gt {}\n".format(sim_index, ret_list[sim_index], total_input_ids[0][sim_index]))
+                
+        '''add finetune stage'''
+        if args.fine_tune:
+            position = 0
+            to_recover_total = torch.cat((START_EMBED, new_input_embed_0), dim=1)
+            total_length = len(ret_list)
+            '''finetune 20 tokens per 100 epoch'''
+            while position + 20 < total_length:
+                txt_file.write("finetuning {} token\n".format(position+20))
+                to_recover_embedding = copy.deepcopy(to_recover_total[:, position+20:, :])
+                to_recover_embedding = to_recover_embedding.detach().requires_grad_(True)
+                fixed_embedding = embed_layer(torch.tensor(ret_list[:position+20])).unsqueeze(0)
+                part_epoch = 100
+                lr = 0.1
+                for i in range(part_epoch):
+                    with torch.no_grad():
+                        clip_range = 0.2
+                        if "7b" in args.base_model_name:
+                            clip_range = 0.06
+                        elif "30b" in args.base_model_name:
+                            clip_range = 0.17
+                        to_recover_embedding = torch.clip(to_recover_embedding, -clip_range, clip_range)
+                    to_recover_embedding = to_recover_embedding.requires_grad_(True)
+                    optim = torch.optim.SGD([to_recover_embedding], lr=lr)
+                    new_input_embed_ = torch.cat((fixed_embedding, to_recover_embedding), dim=1)
+                    new_inputs = {'inputs_embeds': new_input_embed_, 'attention_mask': target_attention_mask} 
+                    hidden_state_list = []
+                    hook_handles = []
+                    def forward_hook(module, input, output):
+                        if isinstance(output, tuple):
+                            for item in output:
+                                hidden_state_list.append(item)
+                        else:
+                            hidden_state_list.append(output)
+            
+                    '''get hidden states from all layers'''
+                    for name, module in model.named_modules():
+                        if len(name) > 1 and name[-2:] == str(args.num_invert_layers):
+                            handle = module.register_forward_hook(forward_hook)
+                            hook_handles.append(handle)
+                    phi_relaxed = model(**new_inputs)
+                    for handle in hook_handles:
+                        handle.remove()
+                    last_hidden_state = hidden_state_list[0]
+                    hidden_state_list = []
+
+                    '''compute loss'''
+                    next_hidden_states_last = next_hidden_states_last.to(last_hidden_state.device)
+                    cos_sim = F.cosine_similarity(last_hidden_state.type(torch.float32), next_hidden_states_last.type(torch.float32), dim=-1)
+                    optim.zero_grad()
+
+                    sum_cos_sim = cos_sim[0][position+20:].sum()
+                    txt_file.write("finetuning {} epoch, {} cos_sim\n".format(i, cos_sim[0][position+20:].mean().data))
+                    (-sum_cos_sim).backward(inputs=[to_recover_embedding])
+                    optim.step()
+                txt_file.write("position cos sim:{}\n".format(cos_sim.data))
+                acc, ret_tokens, ret_list = invert_embedding(torch.cat((fixed_embedding, to_recover_embedding), dim=1),
+                                                            tokenizer, 
+                                                            embed_layer, 
+                                                            total_input_ids, 
+                                                            invert_method=args.invert_method,
+                                                            filter_nonascii=args.filter_nonascii,
+                                                            top_k=args.top_k)
+                to_recover_total = torch.cat((fixed_embedding, to_recover_embedding), dim=1).data
+                position += 20
+            txt_file.write("finetuned ret_list acc {}, token \n{}\n".format(acc, ret_tokens))
+
+        '''best inversion policy'''
+        acc, ret_tokens, ret_list = invert_and_find_best(torch.cat((START_EMBED, new_input_embed_0), dim=1), 
+                                                        next_hidden_states_last,  
+                                                        tokenizer, 
+                                                        model, 
+                                                        total_input_ids,
+                                                        layer_id=args.num_invert_layers,
+                                                        f=txt_file, 
+                                                        invert_method=args.invert_method,
+                                                        filter_nonascii=args.filter_nonascii,
+                                                        top_k=args.top_k)
+        txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
+
+        '''save pickle file'''
+        pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
+        with open("result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
+            pickle.dump(pickle_piece, f)
+
+    txt_file.close()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset-path", type=str, default="data/airline.json")
+    parser.add_argument("--base_model_name", type=str, required=True)
+    parser.add_argument("--lora_model_name", type=str, default=None)
+    parser.add_argument("--lr", type=float, default=0.1)
+    parser.add_argument("--epoch", type=int, default=2000)
+    parser.add_argument("--alpha", type=float, default=1e-3)
+    parser.add_argument("--num-invert-layers", type=int, default=30, 
+                        choices=range(1, 80))
+    parser.add_argument("--init-method", type=str, default="uniform")
+    parser.add_argument("--init-param", type=float, default=0.1)
+    parser.add_argument("--optim-method", type=str, default="cosine",
+                        choices=["cosine", "MSELoss"])
+    parser.add_argument("--invert-method", type=str, default="cosine",
+                        choices=["cosine", "L2"])
+    parser.add_argument("--show-low-confidence", type=bool, default=False)
+    parser.add_argument("--fine-tune", type=bool, default=False)
+    parser.add_argument("--filter-nonascii", type=bool, default=True)
+    parser.add_argument("--top-k", type=int, default=10)
+    
+    parser.add_argument("--seed", type=int, default=0)
+    
+    args = parser.parse_args()
+    main(args)
