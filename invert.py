@@ -16,8 +16,8 @@ from accelerate import Accelerator, dispatch_model
 
 
 # not only vicuna, I should try other version of llama
-def get_model(base_model_name = "/home/cc/zyg/decapoda-research-llama-30b-hf",
-              lora_model_name = "/home/cc/zyg/llama-hh-lora-30B",
+def get_model(base_model_name,
+              lora_model_name,
               model_kwargs={"low_cpu_mem_usage": True, "use_cache": False}):
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
@@ -135,23 +135,6 @@ def get_hidden_state(tokenizer, model, layer_id, prompt=None, input_embed=None, 
     return target_input_ids, target_attention_mask, ori_input_embed, hidden_state_list
 
 
-def get_sorted_top_k(array, top_k=1, axis=-1, reverse=False):
-
-    if reverse:
-        axis_length = array.shape[axis]
-        partition_index = np.take(np.argpartition(array, kth=-top_k, axis=axis),
-                                  range(axis_length - top_k, axis_length), axis)
-    else:
-        partition_index = np.take(np.argpartition(array, kth=top_k, axis=axis), range(0, top_k), axis)
-    top_scores = np.take_along_axis(array, partition_index, axis)
-    sorted_index = np.argsort(top_scores, axis=axis)
-    if reverse:
-        sorted_index = np.flip(sorted_index, axis=axis)
-    top_sorted_scores = np.take_along_axis(top_scores, sorted_index, axis)
-    top_sorted_indexes = np.take_along_axis(partition_index, sorted_index, axis)
-    return top_sorted_scores, top_sorted_indexes
-
-
 def get_hidden_state_base(tokenizer, model, layer_id, prompt=None, input_embed=None, target_attention_mask=None):
     assert(prompt != None or input_embed != None)
     hidden_state_list = []
@@ -230,41 +213,6 @@ def get_hidden_state_base(tokenizer, model, layer_id, prompt=None, input_embed=N
     return target_input_ids, target_attention_mask, ori_input_embed, hidden_state_list
 
 
-def update_weight(weight: torch.Tensor, point, exponential, method="exponential"):
-    assert len(weight.shape) == 1
-    if method == "exponential":
-        if weight[0] >= weight[point]:
-            '''total sum = 1, lr is adjusted according to text length'''
-            weight[:point] = weight[:point] * exponential
-            total_value = weight.sum()
-            weight[point:] += (1 - total_value) / (len(weight) - point)
-    elif method == "linear":
-        if weight[0] >= weight[point]:
-            '''weight on each token is 1'''
-            weight[point:] += exponential
-    else:
-        raise NotImplementedError
-            
-    return weight
-
-
-def init_weight_mask(len_cut_output, recover_length, method="exponential", devices=['cuda:0']):
-    if method == "exponential":
-        weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
-        weight_mask[:recover_length] = 1 / recover_length
-        weight_mask = weight_mask.to(devices[0])
-    elif method == "linear":
-        weight_mask = torch.zeros(len_cut_output + recover_length).type(torch.float16)
-        weight_mask[:recover_length] = 1.0
-        weight_mask = weight_mask.to(devices[0])
-    elif method == "none":
-        weight_mask = torch.ones(len_cut_output + recover_length).type(torch.float16) / (len_cut_output + recover_length)
-        weight_mask = weight_mask.to(devices[0])
-    else: 
-        raise NotImplementedError
-    return weight_mask
-
-
 def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=None, invert_method='cosine', show_position=False, filter_nonascii=True, top_k=10):
     if f != None:
         sys.stdout = f
@@ -316,29 +264,6 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=No
     if f != None:
         sys.stdout = sys.__stdout__
     return acc, ret_tokens, ret_list
-
-
-def forward_and_get_last_hidden_state(model, input_ids, attention_mask, layer_id):
-    new_inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': attention_mask} 
-
-    hidden_state_list = []
-    hook_handles = []
-    def forward_hook(module, input, output):
-        if isinstance(output, tuple):
-            for item in output:
-                hidden_state_list.append(item)
-        else:
-            hidden_state_list.append(output)
-
-    for name, module in model.named_modules():
-        if len(name) > 1 and name[-2:] == str(layer_id):
-            handle = module.register_forward_hook(forward_hook)
-            hook_handles.append(handle)
-    phi_relaxed = model(**new_inputs)
-    for handle in hook_handles:
-        handle.remove()
-    last_hidden_state = hidden_state_list[0]
-    return last_hidden_state
 
 
 def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_input_ids, layer_id, f=None, invert_method='cosine', filter_nonascii=True, top_k=10):
@@ -426,6 +351,29 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
     return acc, ret_tokens, ret_list
 
 
+def forward_and_get_last_hidden_state(model, input_ids, attention_mask, layer_id):
+    new_inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': attention_mask} 
+
+    hidden_state_list = []
+    hook_handles = []
+    def forward_hook(module, input, output):
+        if isinstance(output, tuple):
+            for item in output:
+                hidden_state_list.append(item)
+        else:
+            hidden_state_list.append(output)
+
+    for name, module in model.named_modules():
+        if len(name) > 1 and name[-2:] == str(layer_id):
+            handle = module.register_forward_hook(forward_hook)
+            hook_handles.append(handle)
+    phi_relaxed = model(**new_inputs)
+    for handle in hook_handles:
+        handle.remove()
+    last_hidden_state = hidden_state_list[0]
+    return last_hidden_state
+
+
 def get_perplexity(input_ids, model, layer_id, next_ids=None, top_k=None):
     hidden_state_list = []
     hook_handles = []
@@ -497,6 +445,8 @@ def main(args):
     input_ids_list = []
     attention_mask_list = []
     all_hidden_states_list = []
+
+    prompts = prompts[:2]
     for prompt_ in prompts:
         '''get all hidden states in a list'''
         total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
@@ -737,6 +687,7 @@ def main(args):
 
     txt_file.close()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-path", type=str, default="data/airline.json")
@@ -757,7 +708,6 @@ if __name__ == "__main__":
     parser.add_argument("--fine-tune", type=bool, default=False)
     parser.add_argument("--filter-nonascii", type=bool, default=True)
     parser.add_argument("--top-k", type=int, default=10)
-    
     parser.add_argument("--seed", type=int, default=0)
     
     args = parser.parse_args()
