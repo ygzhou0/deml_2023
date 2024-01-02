@@ -676,7 +676,7 @@ def main(args):
                                                         f=txt_file, 
                                                         invert_method=args.invert_method,
                                                         filter_nonascii=args.filter_nonascii,
-                                                        add_perplexity=args.perplexity
+                                                        add_perplexity=args.perplexity,
                                                         top_k=args.top_k)
         txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
 
