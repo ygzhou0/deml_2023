@@ -13,6 +13,8 @@ import numpy as np
 from peft import PeftModel, LoraConfig, get_peft_model
 from transformers import (AutoModelForCausalLM, AutoTokenizer, top_k_top_p_filtering)
 from accelerate import Accelerator, dispatch_model
+from dataset import Dataset
+from utils import *
 
 
 # not only vicuna, I should try other version of llama
@@ -266,7 +268,9 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=No
     return acc, ret_tokens, ret_list
 
 
-def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_input_ids, layer_id, f=None, invert_method='cosine', filter_nonascii=True, top_k=10):
+def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, 
+                         total_input_ids, layer_id, f=None, invert_method='cosine', 
+                         filter_nonascii=True, add_perplexity=True, top_k=10):
     if f != None:
         sys.stdout = f
     embed_layer = model.model.get_input_embeddings()
@@ -319,7 +323,7 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, total_
         # idx = np.argmax(score)
 
         '''method2: combine top cosine and top perplexity, use 60 layer as criteria'''
-        if i > 0:
+        if i > 0 and add_perplexity:
             input_ids = copy.deepcopy(ret_list[:i])
             perplexity, topk_ids = get_perplexity(input_ids, model, layer_id=layer_id, top_k=top_k)
             top_list += topk_ids.tolist()
@@ -414,6 +418,10 @@ def main(args):
     txt_file = open("{}-{}-{}-{}-{}-{}-{}-{}.log".format(lora_setting, *time.localtime()), "w")
     np.random.seed(args.seed)
 
+    '''load prompt dataset'''
+    prompt_dataset = Dataset(dataset_name=args.dataset_path, dataset_type=args.dataset_type)
+    prompt_dataset.data = prompt_dataset.data[:3]
+
     '''get model'''
     tokenizer, model = get_model(base_model_name=args.base_model_name, lora_model_name=args.lora_model_name)
 
@@ -427,14 +435,6 @@ def main(args):
     START_EMBED = START_EMBED.unsqueeze(0).unsqueeze(0)
     START_EMBED.requires_grad_(False)
 
-    '''load prompts'''
-    if not os.path.exists(args.dataset_path):
-        txt_file.write("{} dataset does not exist!!".format(args.dataset_path))
-        raise FileNotFoundError
-    f = open(args.dataset_path, 'r')
-    prompts = json.load(f)
-    f.close()
-
     '''get range'''
     embed_matrix = np.array(embed_layer.weight.data.cpu())
     left_range = get_sorted_top_k(embed_matrix, top_k=10, axis=0, reverse=False)
@@ -446,8 +446,7 @@ def main(args):
     attention_mask_list = []
     all_hidden_states_list = []
 
-    prompts = prompts[:2]
-    for prompt_ in prompts:
+    for prompt_ in prompt_dataset.get_data():
         '''get all hidden states in a list'''
         total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(tokenizer, 
                     model, layer_id=args.num_invert_layers, prompt=prompt_)
@@ -463,7 +462,7 @@ def main(args):
         # model.merge_adapter()
         model.unload()
 
-    for i, prompt in enumerate(prompts):
+    for i, prompt in enumerate(prompt_dataset.get_data()):
         txt_file.write("recovering {}\n".format(prompt))
         total_input_ids, total_attention_mask, all_hidden_states = input_ids_list[i], attention_mask_list[i], all_hidden_states_list[i]
 
@@ -677,12 +676,13 @@ def main(args):
                                                         f=txt_file, 
                                                         invert_method=args.invert_method,
                                                         filter_nonascii=args.filter_nonascii,
+                                                        add_perplexity=args.perplexity
                                                         top_k=args.top_k)
         txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
 
         '''save pickle file'''
-        pickle_piece = (prompt, torch.cat((START_EMBED, new_input_embed_0), dim=1))
-        with open("result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
+        pickle_piece = (prompt, ret_tokens, torch.cat((START_EMBED, new_input_embed_0), dim=1))
+        with open("results/result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
             pickle.dump(pickle_piece, f)
 
     txt_file.close()
@@ -690,9 +690,11 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset-path", type=str, default="data/airline.json")
-    parser.add_argument("--base_model_name", type=str, required=True)
-    parser.add_argument("--lora_model_name", type=str, default=None)
+    parser.add_argument("--dataset-path", type=str, default="medalpaca/medical_meadow_wikidoc")  # "data/airline.json"
+    parser.add_argument("--dataset-type", type=str, default="datasets",
+                        choices=["local", "datasets", "github"])
+    parser.add_argument("--base-model-name", type=str, required=True)
+    parser.add_argument("--lora-model-name", type=str, default=None)
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--epoch", type=int, default=2000)
     parser.add_argument("--alpha", type=float, default=1e-3)
@@ -707,6 +709,7 @@ if __name__ == "__main__":
     parser.add_argument("--show-low-confidence", type=bool, default=False)
     parser.add_argument("--fine-tune", type=bool, default=False)
     parser.add_argument("--filter-nonascii", type=bool, default=True)
+    parser.add_argument("--perplexity", type=bool, default=True)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     

@@ -6,7 +6,6 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 git clone https://github.com/ygzhou0/deml_2023
 cd deml_2023
 pip install -r requirements.txt
-pip install peft
 cd ..
 sudo apt-get install git-lfs
 git lfs install
