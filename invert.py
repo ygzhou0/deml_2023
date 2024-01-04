@@ -303,9 +303,9 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model,
         ret_list.append(int(torch.topk(dist_ret, top_k).indices[idx].data.cpu()))
 
     print("......start replacing......")
+    start = time.time()
     for i, top_list in enumerate(ret_top_k):
-        cos_sim_list = []
-        
+
         '''method 1: add up cosine and perplexity'''
         # score = torch.zeros(32000)
         # for j, cos_sim_value in enumerate(cos_sim_list):
@@ -327,19 +327,23 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model,
             input_ids = copy.deepcopy(ret_list[:i])
             perplexity, topk_ids = get_perplexity(input_ids, model, layer_id=layer_id, top_k=top_k)
             top_list += topk_ids.tolist()
+        
+        replaced_ret_list = []
         for item in top_list:
-            if filter_nonascii and (not tokenizer.decode([item]).isascii() or item == 0 or item == 2):
-                cos_sim_list.append(0)
-                continue
-            replaced_ret_list = copy.deepcopy(ret_list)
-            replaced_ret_list[i] = item
-            new_hidden_state = forward_and_get_last_hidden_state(model, replaced_ret_list, None, layer_id=layer_id)
-            gt_hidden_state = gt_hidden_state.to(new_hidden_state.device)
-            cos_sim = F.cosine_similarity(new_hidden_state.type(torch.float32), gt_hidden_state.type(torch.float32), dim=-1)
-            cos_sim_list.append(cos_sim[0][i].data.cpu())
+            replaced_ret = copy.deepcopy(ret_list)
+            replaced_ret[i] = item
+            replaced_ret_list.append(replaced_ret)
+
+        new_hidden_states = forward_and_get_last_hidden_state(model, replaced_ret_list, None, layer_id=layer_id)
+        gt_hidden_state = gt_hidden_state.to(new_hidden_states.device)
+        cos_sim_list = F.cosine_similarity(new_hidden_states.index_select(1, torch.tensor([i]).to(model.device)).permute(1,0,2).squeeze(0).type(torch.float32), 
+                                           gt_hidden_state.index_select(1, torch.tensor([i]).to(model.device)).permute(1,0,2).squeeze(0).type(torch.float32), dim=-1)
+        cos_sim_list = cos_sim_list.data.cpu().numpy()
         idx = np.argmax(cos_sim_list)
         ret_list[i] = top_list[idx]
 
+    end = time.time()
+    print("replace cost: {} s".format(end-start))
     print("......calculating accuracy......")
     '''show accuracy'''
     acc_cnt = 0
@@ -356,7 +360,11 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model,
 
 
 def forward_and_get_last_hidden_state(model, input_ids, attention_mask, layer_id):
-    new_inputs = {'input_ids': torch.tensor(input_ids).unsqueeze(0).to(model.device), 'attention_mask': attention_mask} 
+    if len(torch.tensor(input_ids).shape) < 2:
+        input_ids_squeeze = torch.tensor(input_ids).unsqueeze(0).to(model.device)
+    else:
+        input_ids_squeeze = torch.tensor(input_ids).to(model.device)
+    new_inputs = {'input_ids': input_ids_squeeze, 'attention_mask': attention_mask} 
 
     hidden_state_list = []
     hook_handles = []
@@ -420,7 +428,7 @@ def main(args):
 
     '''load prompt dataset'''
     prompt_dataset = Dataset(dataset_name=args.dataset_path, dataset_type=args.dataset_type)
-    prompt_dataset.data = prompt_dataset.data[:3]
+    prompt_dataset.data = prompt_dataset.data[:1]
 
     '''get model'''
     tokenizer, model = get_model(base_model_name=args.base_model_name, lora_model_name=args.lora_model_name)
