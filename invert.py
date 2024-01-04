@@ -270,7 +270,7 @@ def invert_embedding(hidden_state, tokenizer, embed_layer, total_input_ids, f=No
 
 def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model, 
                          total_input_ids, layer_id, f=None, invert_method='cosine', 
-                         filter_nonascii=True, add_perplexity=True, top_k=10):
+                         filter_nonascii=True, add_perplexity=True, top_k_ppl=10, top_k_cos=10):
     if f != None:
         sys.stdout = f
     embed_layer = model.model.get_input_embeddings()
@@ -290,17 +290,17 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model,
             dist_ret = F.cosine_similarity(embed.type(torch.float32), embed_layer.weight.type(torch.float32), dim=-1).detach().cpu()
         else:
             raise NotImplementedError
-        ret_top_k.append(torch.topk(dist_ret, top_k).indices.tolist())
+        ret_top_k.append(torch.topk(dist_ret, top_k_cos).indices.tolist())
         idx = 0
         if filter_nonascii:
-            p = torch.topk(dist_ret, top_k).indices[idx]
+            p = torch.topk(dist_ret, top_k_cos).indices[idx]
             while not tokenizer.decode([p]).isascii() or p == 0 or p == 2:
                 idx += 1
-                if idx == top_k:
+                if idx == top_k_cos:
                     idx = 0
                     print("fail to filter non ascii"); break
-                p = torch.topk(dist_ret, top_k).indices[idx]
-        ret_list.append(int(torch.topk(dist_ret, top_k).indices[idx].data.cpu()))
+                p = torch.topk(dist_ret, top_k_cos).indices[idx]
+        ret_list.append(int(torch.topk(dist_ret, top_k_cos).indices[idx].data.cpu()))
 
     print("......start replacing......")
     start = time.time()
@@ -325,7 +325,7 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model,
         '''method2: combine top cosine and top perplexity, use 60 layer as criteria'''
         if i > 0 and add_perplexity:
             input_ids = copy.deepcopy(ret_list[:i])
-            perplexity, topk_ids = get_perplexity(input_ids, model, layer_id=layer_id, top_k=top_k)
+            perplexity, topk_ids = get_perplexity(input_ids, model, layer_id=layer_id, top_k=top_k_ppl)
             top_list += topk_ids.tolist()
         
         replaced_ret_list = []
@@ -428,7 +428,7 @@ def main(args):
 
     '''load prompt dataset'''
     prompt_dataset = Dataset(dataset_name=args.dataset_path, dataset_type=args.dataset_type)
-    prompt_dataset.data = prompt_dataset.data[:1]
+    prompt_dataset.data = prompt_dataset.data[:args.dataset_len]
 
     '''get model'''
     tokenizer, model = get_model(base_model_name=args.base_model_name, lora_model_name=args.lora_model_name)
@@ -522,13 +522,14 @@ def main(args):
 
         for i in range(part_epoch):
             '''clip embedding'''
-            with torch.no_grad():
-                clip_range = 0.2
-                if "7b" in args.base_model_name:
-                    clip_range = 0.06
-                elif "30b" in args.base_model_name:
-                    clip_range = 0.17
-                new_input_embed_0 = torch.clip(new_input_embed_0, -clip_range, clip_range)
+            if args.clip:
+                with torch.no_grad():
+                    clip_range = 0.2
+                    if "7b" in args.base_model_name:
+                        clip_range = 0.06
+                    elif "30b" in args.base_model_name:
+                        clip_range = 0.17
+                    new_input_embed_0 = torch.clip(new_input_embed_0, -clip_range, clip_range)
             new_input_embed_0 = new_input_embed_0.requires_grad_(True)
             optim = torch.optim.SGD([new_input_embed_0], lr=lr)
 
@@ -669,7 +670,7 @@ def main(args):
                                                             total_input_ids, 
                                                             invert_method=args.invert_method,
                                                             filter_nonascii=args.filter_nonascii,
-                                                            top_k=args.top_k)
+                                                            top_k=args.top_k_cos)
                 to_recover_total = torch.cat((fixed_embedding, to_recover_embedding), dim=1).data
                 position += 20
             txt_file.write("finetuned ret_list acc {}, token \n{}\n".format(acc, ret_tokens))
@@ -685,7 +686,8 @@ def main(args):
                                                         invert_method=args.invert_method,
                                                         filter_nonascii=args.filter_nonascii,
                                                         add_perplexity=args.perplexity,
-                                                        top_k=args.top_k)
+                                                        top_k_ppl=args.top_k_ppl,
+                                                        top_k_cos=args.top_k_cos)
         txt_file.write("acc : {},\n replaced token :\n{}\n".format(acc, ret_tokens))
 
         '''save pickle file'''
@@ -701,11 +703,13 @@ if __name__ == "__main__":
     parser.add_argument("--dataset-path", type=str, default="medalpaca/medical_meadow_wikidoc")  # "data/airline.json"
     parser.add_argument("--dataset-type", type=str, default="datasets",
                         choices=["local", "datasets", "github"])
+    parser.add_argument("--dataset-len", type=int, default=100)
     parser.add_argument("--base-model-name", type=str, required=True)
     parser.add_argument("--lora-model-name", type=str, default=None)
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--epoch", type=int, default=2000)
     parser.add_argument("--alpha", type=float, default=1e-3)
+    parser.add_argument("--clip", type=bool, default=True)
     parser.add_argument("--num-invert-layers", type=int, default=30, 
                         choices=range(1, 80))
     parser.add_argument("--init-method", type=str, default="uniform")
@@ -718,7 +722,8 @@ if __name__ == "__main__":
     parser.add_argument("--fine-tune", type=bool, default=False)
     parser.add_argument("--filter-nonascii", type=bool, default=True)
     parser.add_argument("--perplexity", type=bool, default=True)
-    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--top-k-ppl", type=int, default=10)
+    parser.add_argument("--top-k-cos", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     
     args = parser.parse_args()
