@@ -14,4 +14,4 @@ Use `--dataset-path` and `--dataset-type` to specify dataset. Dataset type can b
 Use `--lr`, `--epoch`, `--alpha`, `--perplexity` to set the corresponding parameters.
 
 ## metrics
-Please refer to `metric.py` for evaluation metrics.
+Please refer to `misc.py` for evaluation metrics.
