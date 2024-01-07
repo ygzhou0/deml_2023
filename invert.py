@@ -424,6 +424,7 @@ def main(args):
     '''create log file'''
     lora_setting = "with_lora" if args.lora_model_name is not None else "no_lora"
     txt_file = open("{}-{}-{}-{}-{}-{}-{}-{}.log".format(lora_setting, *time.localtime()), "w")
+    txt_file.write("invert settings: \nbase model: {}\nloramodel: {}\n Dataset: {}\n".format(args.base_model_name, args.lora_model_name, args.dataset_path))
     np.random.seed(args.seed)
 
     '''load prompt dataset'''
