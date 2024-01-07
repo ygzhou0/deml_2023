@@ -11,4 +11,7 @@ Use `--lora-model-name` to add a huggingface lora adapter, which aligns to the b
 Use `--dataset-path` and `--dataset-type` to specify dataset. Dataset type can be github dataset, local json file, or huggingface datasets.
 
 ### hyper-parameters
-Use `--lr`, `--epoch`, `--alpha`, `--perplexity` to set the corresponding parameter.
+Use `--lr`, `--epoch`, `--alpha`, `--perplexity` to set the corresponding parameters.
+
+## metrics
+Please refer to `metric.py` for evaluation metrics.
