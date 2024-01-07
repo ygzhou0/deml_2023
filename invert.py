@@ -336,8 +336,8 @@ def invert_and_find_best(hidden_state, gt_hidden_state, tokenizer, model,
 
         new_hidden_states = forward_and_get_last_hidden_state(model, replaced_ret_list, None, layer_id=layer_id)
         gt_hidden_state = gt_hidden_state.to(new_hidden_states.device)
-        cos_sim_list = F.cosine_similarity(new_hidden_states.index_select(1, torch.tensor([i]).to(model.device)).permute(1,0,2).squeeze(0).type(torch.float32), 
-                                           gt_hidden_state.index_select(1, torch.tensor([i]).to(model.device)).permute(1,0,2).squeeze(0).type(torch.float32), dim=-1)
+        cos_sim_list = F.cosine_similarity(new_hidden_states.index_select(1, torch.tensor([i]).to(new_hidden_states.device)).permute(1,0,2).squeeze(0).type(torch.float32), 
+                                           gt_hidden_state.index_select(1, torch.tensor([i]).to(new_hidden_states.device)).permute(1,0,2).squeeze(0).type(torch.float32), dim=-1)
         cos_sim_list = cos_sim_list.data.cpu().numpy()
         idx = np.argmax(cos_sim_list)
         ret_list[i] = top_list[idx]
@@ -692,7 +692,8 @@ def main(args):
 
         '''save pickle file'''
         pickle_piece = (prompt, ret_tokens, torch.cat((START_EMBED, new_input_embed_0), dim=1))
-        with open("results/result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()), "wb") as f:
+        ret_file_path = os.path.join(args.output_dir, "result-{}-{}-{}-{}-{}-{}.pickle".format(*time.localtime()))
+        with open(ret_file_path, "wb") as f:
             pickle.dump(pickle_piece, f)
 
     txt_file.close()
@@ -725,6 +726,7 @@ if __name__ == "__main__":
     parser.add_argument("--top-k-ppl", type=int, default=10)
     parser.add_argument("--top-k-cos", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--output-dir", type=str, default="results") 
     
     args = parser.parse_args()
     main(args)
