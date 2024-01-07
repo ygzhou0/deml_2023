@@ -426,6 +426,8 @@ def main(args):
     txt_file = open("{}-{}-{}-{}-{}-{}-{}-{}.log".format(lora_setting, *time.localtime()), "w")
     txt_file.write("invert settings: \nbase model: {}\nloramodel: {}\n Dataset: {}\n".format(args.base_model_name, args.lora_model_name, args.dataset_path))
     np.random.seed(args.seed)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
     '''load prompt dataset'''
     prompt_dataset = Dataset(dataset_name=args.dataset_path, dataset_type=args.dataset_type)
