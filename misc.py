@@ -1,6 +1,9 @@
 import nltk
 from rouge_score import rouge_scorer
 import editdistance
+import pickle
+import os
+from transformers import AutoTokenizer
 
 
 class RecoverMetric:
@@ -49,8 +52,48 @@ class RecoverMetric:
         metrics.update(self.get_edit_distance(rc_text_token, gt_text_token))
         return metrics
 
-a = ["aad", "noids", "naui", "iogap+", "13@"]
-b = ["aad", "noids", "nui", "a", "iogap+", "13", "@#"]
+
+
 metrics = RecoverMetric()
-m = metrics.get_metric(a, b)
-print(m)
+tokenizer = AutoTokenizer.from_pretrained(
+    "E:\\uni\\senior\\llm-attacks\\vicuna-7b-v1.3",
+    trust_remote_code=True,
+    use_fast=False
+)
+if not tokenizer.pad_token:
+    tokenizer.pad_token = tokenizer.eos_token
+tokenizer.padding_side = 'left'
+pickle_fp = "E:\\uni\\deml_github\\results\\65B-airline-64layer-results"
+pr = rec = F1 = r1 = r2 = rL = b1 = b2 = b4 = e = 0
+cnt = 0
+for root, dirs, files in os.walk(pickle_fp):
+    for file in files:
+        # print(os.path.join(pickle_fp, file))
+        with open(os.path.join(pickle_fp, file), 'rb') as f:
+            rc_text, or_text, tensor = pickle.load(f)
+        # print(rc_text, or_text)
+        rc_token = tokenizer.tokenize(rc_text)
+        gt_token = tokenizer.tokenize(or_text)
+        m = metrics.get_metric(rc_token, gt_token)
+        # print(m)
+        pr += m['precision']
+        rec += m['recall']
+        F1 += m['F1 score']
+        r1 += m['rouge1']
+        r2 += m['rouge2']
+        rL += m['rougeL']
+        b1 += m['bleu1']
+        b2 += m['bleu2']
+        b4 += m['bleu4']
+        e += m['edit distance']
+        cnt += 1
+print('precision', pr / cnt)
+print('recall', rec / cnt)
+print('F1 score', F1 / cnt)
+print('rouge1', r1 / cnt)
+print('rouge2', r2 / cnt)
+print('rougeL', rL / cnt)
+print('bleu1', b1 / cnt)
+print('bleu2', b2 / cnt)
+print('bleu4', b4 / cnt)
+print("edit distance", e / cnt)
