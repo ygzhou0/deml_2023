@@ -7,6 +7,8 @@ from transformers import AutoTokenizer
 
 
 class RecoverMetric:
+    def __init__(self):
+        pass
 
     def get_p_r_f1(self, rc_text_token: list, gt_text_token: list):
         total_pre = len(gt_text_token)
@@ -21,7 +23,7 @@ class RecoverMetric:
             if item in rc_text_token:
                 recall += 1
         recall = recall / total_rc
-        f1 = 2 / (1/recall + 1/precision)
+        f1 = 2 / (1 / recall + 1 / precision)
         ret = {"precision": precision, "recall": recall, "F1 score": f1}
         return ret
 
@@ -37,7 +39,8 @@ class RecoverMetric:
     def get_bleu_score(self, rc_text_token: list, gt_text_token: list):
         BLEU1score = nltk.translate.bleu_score.sentence_bleu([gt_text_token], rc_text_token, weights=([1]))
         BLEU2score = nltk.translate.bleu_score.sentence_bleu([gt_text_token], rc_text_token, weights=(0.5, 0.5))
-        BLEU4score = nltk.translate.bleu_score.sentence_bleu([gt_text_token], rc_text_token, weights=(0.25, 0.25, 0.25, 0.25))
+        BLEU4score = nltk.translate.bleu_score.sentence_bleu([gt_text_token], rc_text_token,
+                                                             weights=(0.25, 0.25, 0.25, 0.25))
         bleu_ret = {"bleu1": BLEU1score, "bleu2": BLEU2score, "bleu4": BLEU4score}
         return bleu_ret
 
@@ -53,29 +56,26 @@ class RecoverMetric:
         return metrics
 
 
-
+path_to_tokenizer = "E:\\uni\\senior\\llm-attacks\\vicuna-7b-v1.3"
 metrics = RecoverMetric()
 tokenizer = AutoTokenizer.from_pretrained(
-    "E:\\uni\\senior\\llm-attacks\\vicuna-7b-v1.3",
+    path_to_tokenizer,
     trust_remote_code=True,
     use_fast=False
 )
 if not tokenizer.pad_token:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = 'left'
-pickle_fp = "E:\\uni\\deml_github\\results\\65B-airline-64layer-results"
+pickle_fp = "results/65B-airline-64layer-results"
 pr = rec = F1 = r1 = r2 = rL = b1 = b2 = b4 = e = 0
 cnt = 0
 for root, dirs, files in os.walk(pickle_fp):
     for file in files:
-        # print(os.path.join(pickle_fp, file))
         with open(os.path.join(pickle_fp, file), 'rb') as f:
             rc_text, or_text, tensor = pickle.load(f)
-        # print(rc_text, or_text)
         rc_token = tokenizer.tokenize(rc_text)
         gt_token = tokenizer.tokenize(or_text)
         m = metrics.get_metric(rc_token, gt_token)
-        # print(m)
         pr += m['precision']
         rec += m['recall']
         F1 += m['F1 score']
